@@ -24,6 +24,21 @@ export function extractRequestConfig(body, stream) {
 export function extractUsageFromResponse(responseBody) {
   if (!responseBody || typeof responseBody !== "object") return null;
 
+  // OpenAI Responses API. Claude also has input/output_tokens, so do not use
+  // those shared field names as the discriminator or Claude cache usage is lost.
+  const isResponsesApi = responseBody.object === "response"
+    || responseBody.usage?.input_tokens_details !== undefined
+    || responseBody.usage?.output_tokens_details !== undefined;
+  if (isResponsesApi && responseBody.usage) {
+    return {
+      prompt_tokens: responseBody.usage.input_tokens || responseBody.usage.prompt_tokens || 0,
+      completion_tokens: responseBody.usage.output_tokens || responseBody.usage.completion_tokens || 0,
+      cached_tokens: responseBody.usage.input_tokens_details?.cached_tokens,
+      reasoning_tokens: responseBody.usage.output_tokens_details?.reasoning_tokens
+        ?? responseBody.usage.completion_tokens_details?.reasoning_tokens
+    };
+  }
+
   // Claude format
   if (responseBody.usage?.input_tokens !== undefined) {
     return {
@@ -66,6 +81,7 @@ export function buildRequestDetail(base, overrides = {}) {
     timestamp: new Date().toISOString(),
     latency: base.latency || { ttft: 0, total: 0 },
     tokens: base.tokens || { prompt_tokens: 0, completion_tokens: 0 },
+    headers: base.headers || base.clientRawRequest?.headers || base.request?.headers || undefined,
     request: base.request,
     providerRequest: base.providerRequest || null,
     providerResponse: base.providerResponse || null,
@@ -122,6 +138,6 @@ export function saveUsageStats({ provider, model, tokens, connectionId, apiKey, 
     timestamp: new Date().toISOString(),
     connectionId: connectionId || undefined,
     apiKey: apiKey || undefined,
-    endpoint: endpoint || null
+    endpoint: endpoint || null,
   }).catch(() => {});
 }

@@ -10,6 +10,7 @@ import { buildRequestDetail, extractRequestConfig, extractUsageFromResponse, sav
 import { appendRequestLog, saveRequestDetail } from "@/lib/usageDb.js";
 import { decloakToolNames } from "../../utils/claudeCloaking.js";
 import { ROLE, RESPONSES_ITEM } from "../../translator/schema/index.js";
+import { applyResponsePolicy, createReasoningUsagePolicy, publicModelName } from "../../utils/reasoningUsagePolicy.js";
 
 function parseToolArguments(value) {
   if (!value) return {};
@@ -281,7 +282,7 @@ export function translateNonStreamingResponse(responseBody, targetFormat, source
 /**
  * Handle non-streaming response from provider.
  */
-export async function handleNonStreamingResponse({ providerResponse, provider, model, sourceFormat, targetFormat, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, customToolNames, trackDone, appendLog, pxpipe, reqTag, log }) {
+export async function handleNonStreamingResponse({ providerResponse, provider, model, clientRequestedModel, sourceFormat, targetFormat, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, customToolNames, trackDone, appendLog, pxpipe, reqTag, log }) {
   trackDone();
   const contentType = providerResponse.headers.get("content-type") || "";
   let responseBody;
@@ -316,14 +317,14 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
   // Decloak tool_use names once on raw Claude body, before any translation (INPUT side)
   responseBody = decloakToolNames(responseBody, toolNameMap);
 
-  const usage = extractUsageFromResponse(responseBody);
-  appendLog({ tokens: usage, status: "200 OK" });
-  saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, silent: true });
-  if (log?.line) log.line(reqTag, "📊", formatDoneLine({ usage, latency: { total: Date.now() - requestStartTime } }));
-
   const translatedResponse = needsTranslation(targetFormat, sourceFormat)
     ? translateNonStreamingResponse(responseBody, targetFormat, sourceFormat, customToolNames)
     : responseBody;
+  applyResponsePolicy(translatedResponse, createReasoningUsagePolicy(body, model));
+  const usage = extractUsageFromResponse(translatedResponse) || extractUsageFromResponse(responseBody);
+  appendLog({ tokens: usage, status: "200 OK" });
+  saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, requestBody: finalBody || translatedBody || body, silent: true });
+  if (log?.line) log.line(reqTag, "📊", formatDoneLine({ usage, latency: { total: Date.now() - requestStartTime } }));
   const isClaudeMessageResponse = sourceFormat === FORMATS.CLAUDE && translatedResponse?.type === "message";
   // Responses-format translation produces a `object:"response"` body with no
   // `choices`; skip the Chat-Completions-specific post-processing below for it.
@@ -343,6 +344,11 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
   if (!isClaudeMessageResponse && !isResponsesResponse) {
     if (!translatedResponse.object) translatedResponse.object = "chat.completion";
     if (!translatedResponse.created) translatedResponse.created = Math.floor(Date.now() / 1000);
+  }
+
+  if (translatedResponse && typeof translatedResponse === "object") {
+    const cleanModel = publicModelName(clientRequestedModel || body?.model || translatedResponse.model || model);
+    translatedResponse.model = cleanModel;
   }
 
   // Strip Azure-specific fields
@@ -375,6 +381,7 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
     provider, model, connectionId,
     latency: { ttft: totalLatency, total: totalLatency },
     tokens: usage || { prompt_tokens: 0, completion_tokens: 0 },
+    headers: clientRawRequest?.headers,
     request: extractRequestConfig(body, stream),
     providerRequest: finalBody || translatedBody || null,
     providerResponse: responseBody || null,

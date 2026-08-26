@@ -2,13 +2,54 @@ import { v4 as uuidv4 } from "uuid";
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 
+export function normalizeComboModels(models) {
+  if (!Array.isArray(models)) return [];
+  return models.map((m) => {
+    if (typeof m === "string") {
+      return {
+        model: m,
+        pricingType: "request",
+        price: null,
+        minPrice: null,
+        maxInputTokens: null,
+        timeSchedule: {
+          enabled: false,
+          startTime: "00:00",
+          endTime: "23:59",
+        },
+      };
+    }
+    if (m && typeof m === "object") {
+      const schedule = m.timeSchedule && typeof m.timeSchedule === "object" ? {
+        enabled: !!m.timeSchedule.enabled,
+        startTime: typeof m.timeSchedule.startTime === "string" ? m.timeSchedule.startTime.trim() : "00:00",
+        endTime: typeof m.timeSchedule.endTime === "string" ? m.timeSchedule.endTime.trim() : "23:59",
+      } : {
+        enabled: false,
+        startTime: "00:00",
+        endTime: "23:59",
+      };
+
+      return {
+        model: m.model || "",
+        pricingType: m.pricingType === "token" || m.pricingType === "input_token" ? "token" : "request",
+        price: m.price !== undefined && m.price !== null && m.price !== "" ? Number(m.price) : null,
+        minPrice: m.minPrice !== undefined && m.minPrice !== null && m.minPrice !== "" ? Number(m.minPrice) : null,
+        maxInputTokens: m.maxInputTokens !== undefined && m.maxInputTokens !== null && m.maxInputTokens !== "" && Number(m.maxInputTokens) > 0 ? Math.floor(Number(m.maxInputTokens)) : null,
+        timeSchedule: schedule,
+      };
+    }
+    return m;
+  }).filter((m) => m && m.model);
+}
+
 function rowToCombo(row) {
   if (!row) return null;
   return {
     id: row.id,
     name: row.name,
     kind: row.kind,
-    models: parseJson(row.models, []),
+    models: normalizeComboModels(parseJson(row.models, [])),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

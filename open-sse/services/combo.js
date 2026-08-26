@@ -6,6 +6,10 @@ import { checkFallbackError, formatRetryAfter } from "./accountFallback.js";
 import { unavailableResponse } from "../utils/error.js";
 import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { extractTextContent } from "../translator/formats/gemini.js";
+import { stripThinkingSuffix } from "../translator/concerns/thinkingUnified.js";
+import { markComboModelRequest, publicModelName } from "../utils/reasoningUsagePolicy.js";
+import { estimateInputTokens } from "../utils/inputTokenEstimator.js";
+import { nextDistributedCounter } from "../../src/lib/cluster/redisState.js";
 
 // Hard capabilities = input modalities; missing one drops request data (e.g. image
 // stripped). Must be prioritized. Soft (e.g. search) only degrades a feature.
@@ -66,19 +70,233 @@ export function reorderByCapabilities(models, required) {
   const soft = [...required].filter((c) => !HARD_CAPS.has(c));
 
   const tierOf = (m) => {
-    const slash = typeof m === "string" ? m.indexOf("/") : -1;
-    const provider = slash > 0 ? m.slice(0, slash) : "";
-    const model = slash > 0 ? m.slice(slash + 1) : m;
+    const rawStr = typeof m === "object" && m !== null ? m.model : m;
+    const slash = typeof rawStr === "string" ? rawStr.indexOf("/") : -1;
+    const provider = slash > 0 ? rawStr.slice(0, slash) : "";
+    const model = slash > 0 ? rawStr.slice(slash + 1) : rawStr;
     const caps = getCapabilitiesForModel(provider, model);
     if (!hard.every((c) => caps[c] === true)) return 2;
     return soft.every((c) => caps[c] === true) ? 0 : 1;
   };
 
+  const tiers = models.map((m, i) => ({ m, i, t: tierOf(m) }));
+  if (tiers.every((x) => x.t === tiers[0].t)) return models;
+
   // Stable sort by tier (Array.prototype.sort is stable in modern engines).
-  return models
-    .map((m, i) => ({ m, i, t: tierOf(m) }))
+  return tiers
     .sort((a, b) => a.t - b.t || a.i - b.i)
     .map((x) => x.m);
+}
+
+export { estimateInputTokens } from "../utils/inputTokenEstimator.js";
+
+/**
+ * Remove provider/deployment identifiers from an upstream error before it is
+ * returned through a combo. Internal routes commonly prefix errors with
+ * `[provider-id/internal-model]`; exposing that would make the failure path
+ * inconsistent with successful responses, which always use the public combo
+ * name.
+ */
+export function formatComboErrorForClient(message, comboName) {
+  const publicModel = publicModelName(comboName || "model");
+  const withoutInternalContext = String(message || "")
+    .replace(/\[[^\]\r\n]*\/[^\]\r\n]*\]\s*/g, "")
+    .trim();
+  return `[${publicModel}]${withoutInternalContext ? ` ${withoutInternalContext}` : ""}`;
+}
+
+async function publicizeComboFailureResponse(response, message, comboName) {
+  const publicMessage = formatComboErrorForClient(message, comboName);
+  let payload;
+  try {
+    payload = await response.clone().json();
+  } catch {
+    payload = null;
+  }
+
+  if (payload && typeof payload === "object") {
+    if (payload.error && typeof payload.error === "object" && !Array.isArray(payload.error)) {
+      payload.error.message = publicMessage;
+    } else {
+      payload.error = { message: publicMessage };
+    }
+  } else {
+    payload = { error: { message: publicMessage } };
+  }
+
+  const headers = new Headers(response.headers);
+  headers.set("Content-Type", "application/json");
+  return new Response(JSON.stringify(payload), {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+/**
+ * Calculate estimated cost for a model config given estimated input tokens
+ * @param {string|Object} modelItem
+ * @param {number} estimatedTokens
+ * @returns {number} Cost in USD, or Infinity if price is not configured
+ */
+export function calculateModelCost(modelItem, estimatedTokens = 0) {
+  if (!modelItem) return Infinity;
+  // If string, price is unset -> Infinity
+  if (typeof modelItem === "string") return Infinity;
+
+  const rawPrice = modelItem.price;
+  if (rawPrice === "" || rawPrice === null || rawPrice === undefined) return Infinity;
+  const price = typeof rawPrice === "number" ? rawPrice : parseFloat(rawPrice);
+  if (!Number.isFinite(price) || price < 0) return Infinity;
+
+  const pricingType = modelItem.pricingType || "request";
+  if (pricingType === "token" || pricingType === "input_token") {
+    const rawMin = modelItem.minPrice;
+    const minPrice = (rawMin !== "" && rawMin !== null && rawMin !== undefined) ? (parseFloat(rawMin) || 0) : 0;
+    const tokenCost = (estimatedTokens / 1_000_000) * price;
+    return Math.max(minPrice, tokenCost);
+  }
+
+  // Request pricing
+  return price;
+}
+
+/**
+ * Reorder combo models by calculated cost ascending (Lowest Cost first)
+ * Models without prices are sorted last (cost = Infinity), tie-breaks preserve original index.
+ * @param {Array} models
+ * @param {Object} body
+ * @returns {Array} Reordered models
+ */
+export function reorderByLowestCost(models, body, estimatedInputTokens = null) {
+  if (!Array.isArray(models) || models.length <= 1) return models;
+
+  const estimatedTokens = Number.isFinite(estimatedInputTokens)
+    ? estimatedInputTokens
+    : estimateInputTokens(body);
+  return models
+    .map((m, i) => ({
+      m,
+      i,
+      // A model that cannot satisfy the requested input remains a
+      // fallback, but must never win merely because it is cheaper.
+      cost: supportsRequestedTokenLimits(m, estimatedTokens)
+        ? calculateModelCost(m, estimatedTokens)
+        : Infinity,
+    }))
+    .sort((a, b) => {
+      if (a.cost !== b.cost) return a.cost - b.cost;
+      return a.i - b.i;
+    })
+    .map((x) => x.m);
+}
+
+function positiveNumber(value) {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+/** Whether a combo object item declares enough input capacity for this request. */
+export function supportsRequestedTokenLimits(modelItem, inputTokens) {
+  if (!modelItem || typeof modelItem !== "object") return true;
+  const maxInput = positiveNumber(modelItem.maxInputTokens ?? modelItem.maxInput ?? modelItem.maxContextTokens ?? modelItem.maxContext);
+  return !maxInput || inputTokens <= maxInput;
+}
+
+function hasDeclaredInputLimit(models) {
+  return Array.isArray(models) && models.some((model) => {
+    if (!model || typeof model !== "object") return false;
+    return positiveNumber(model.maxInputTokens ?? model.maxInput ?? model.maxContextTokens ?? model.maxContext) !== null;
+  });
+}
+
+/** Whether the lowest-cost ordering actually depends on input size. */
+/**
+ * Keep the selected strategy's order among compatible models, but defer models
+ * whose declared input limit is too small until every compatible option fails.
+ */
+export function deferModelsExceedingInputLimit(models, body, estimatedInputTokens = null) {
+  if (!Array.isArray(models) || models.length <= 1) return models;
+  if (!hasDeclaredInputLimit(models)) return models;
+
+  const estimatedTokens = Number.isFinite(estimatedInputTokens)
+    ? estimatedInputTokens
+    : estimateInputTokens(body);
+  const compatible = [];
+  const undersized = [];
+  for (const model of models) {
+    (supportsRequestedTokenLimits(model, estimatedTokens) ? compatible : undersized).push(model);
+  }
+  return undersized.length === 0 ? models : [...compatible, ...undersized];
+}
+
+/**
+ * Get current time in minutes from midnight in Vietnam time (UTC+7).
+ * @param {Date} [date=new Date()]
+ * @returns {number} 0..1439
+ */
+export function getVietnamTimeMinutes(date = new Date()) {
+  const utcMs = date.getTime() + (date.getTimezoneOffset() * 60 * 1000);
+  const vnMs = utcMs + (7 * 60 * 60 * 1000);
+  const vnDate = new Date(vnMs);
+  return vnDate.getHours() * 60 + vnDate.getMinutes();
+}
+
+/**
+ * Parse "HH:mm" time string into minutes from midnight (0..1439).
+ * @param {string} timeStr
+ * @returns {number|null}
+ */
+export function parseTimeToMinutes(timeStr) {
+  if (!timeStr || typeof timeStr !== "string") return null;
+  const parts = timeStr.trim().split(":");
+  if (parts.length < 2) return null;
+  const hours = parseInt(parts[0], 10);
+  const minutes = parseInt(parts[1], 10);
+  if (isNaN(hours) || isNaN(minutes)) return null;
+  return (hours % 24) * 60 + (minutes % 60);
+}
+
+/**
+ * Check if a model is currently active according to its Vietnam (UTC+7) time schedule.
+ * @param {Object|string} modelItem
+ * @param {Date} [date=new Date()]
+ * @returns {boolean}
+ */
+export function isModelActiveAtTime(modelItem, date = new Date()) {
+  if (!modelItem || typeof modelItem !== "object") return true;
+  const schedule = modelItem.timeSchedule;
+  if (!schedule || schedule.enabled !== true) return true;
+
+  const startMin = parseTimeToMinutes(schedule.startTime);
+  const endMin = parseTimeToMinutes(schedule.endTime);
+  if (startMin === null || endMin === null) return true;
+
+  // If start equals end, consider active all day
+  if (startMin === endMin) return true;
+
+  const curMin = getVietnamTimeMinutes(date);
+
+  // Standard daytime range (e.g. 08:00 to 17:00)
+  if (startMin < endMin) {
+    return curMin >= startMin && curMin < endMin;
+  }
+
+  // Overnight range (e.g. 23:00 to 05:00)
+  return curMin >= startMin || curMin < endMin;
+}
+
+/**
+ * Filter combo models by their time schedule.
+ * Safe fallback: If all models are filtered out, returns the original list.
+ * @param {Array} models
+ * @param {Date} [date=new Date()]
+ * @returns {Array}
+ */
+export function filterModelsByTimeSchedule(models, date = new Date()) {
+  if (!Array.isArray(models) || models.length <= 1) return models;
+  const active = models.filter((m) => isModelActiveAtTime(m, date));
+  return active.length > 0 ? active : models;
 }
 
 /**
@@ -178,7 +396,13 @@ export function detectRequiredCapabilities(body) {
   const contents = body.contents || body.request?.contents;                      // gemini / antigravity
   for (const c of trailingUserItems(contents)) scanContent(c.parts);
 
-  // search: temporarily disabled in auto-switch (feature not wired yet).
+  // tools: web_search / google_search
+  if (Array.isArray(body?.tools)) {
+    for (const t of body.tools) {
+      const type = t?.type || t?.function?.name;
+      if (type === "web_search" || type === "google_search") required.add("search");
+    }
+  }
 
   return required;
 }
@@ -237,6 +461,28 @@ export function getRotatedModels(models, comboName, strategy, stickyLimit = 1) {
 }
 
 /**
+ * Distributed variant of round-robin routing. When Redis is configured, every
+ * 9Router instance increments the same counter, so two workers cannot both
+ * choose the first model simply because they have independent process memory.
+ *
+ * Redis deliberately remains optional: no URL, a connection failure, or a
+ * transient Redis outage falls back to the existing in-process rotation.
+ */
+export async function getDistributedRotatedModels(models, comboName, strategy, stickyLimit = 1) {
+  if (!models || models.length <= 1 || strategy !== "round-robin") return models;
+
+  const normalizedStickyLimit = normalizeStickyLimit(stickyLimit);
+  const rotationKey = comboName || "__default__";
+  const count = await nextDistributedCounter(`combo-rotation:${rotationKey}`);
+  if (!Number.isFinite(count) || count < 1) {
+    return getRotatedModels(models, comboName, strategy, normalizedStickyLimit);
+  }
+
+  const currentIndex = Math.floor((count - 1) / normalizedStickyLimit) % models.length;
+  return rotateModelsFromIndex(models, currentIndex);
+}
+
+/**
  * Reset in-memory rotation state when combo/settings change
  * @param {string} [comboName] - Combo name to reset; omit to clear all
  */
@@ -277,32 +523,86 @@ export function getComboModelsFromData(modelStr, combosData) {
  * @param {number|string} [options.comboStickyLimit=1] - Requests per combo model before switching
  * @returns {Promise<Response>}
  */
-export async function handleComboChat({ body, models, handleSingleModel, log, comboName, comboStrategy, comboStickyLimit = 1, autoSwitch = true }) {
-  // Apply rotation strategy if enabled
-  let rotatedModels = getRotatedModels(models, comboName, comboStrategy, comboStickyLimit);
+export async function handleComboChat({
+  body,
+  models,
+  handleSingleModel,
+  log,
+  comboName,
+  comboStrategy,
+  comboStickyLimit = 1,
+  autoSwitch = true,
+}) {
+  // Tokenizing a large context is CPU intensive. Routing can need the same
+  // value for price ordering and max-input deferral, so calculate it once per
+  // request and pass it through every ordering stage.
+  const needsInputTokenEstimate = Array.isArray(models)
+    && models.length > 1
+    && (comboStrategy === "lowest-cost" || hasDeclaredInputLimit(models));
+  // One cheap, shared estimator is used for cost ordering and max-input
+  // deferral. This deliberately trades exact near-limit routing for keeping
+  // large multi-turn requests off the event loop.
+  const estimatedInputTokens = needsInputTokenEstimate ? estimateInputTokens(body) : null;
+
+  const applyStrategy = async (tierModels) => {
+    if (comboStrategy === "lowest-cost") {
+      return reorderByLowestCost(tierModels, body, estimatedInputTokens);
+    }
+    return getDistributedRotatedModels(tierModels, comboName, comboStrategy, comboStickyLimit);
+  };
+
+  // Filter models active at current Vietnam time (UTC+7)
+  const timeFilteredModels = filterModelsByTimeSchedule(models);
+  if (timeFilteredModels.length !== models.length) {
+    const activeNames = timeFilteredModels.map((m) => (typeof m === "object" && m !== null ? m.model : m)).join(", ");
+    log?.info?.("COMBO", `Time schedule active (VN UTC+7) [${timeFilteredModels.length}/${models.length}]: ${activeNames}`);
+  }
+
+  let orderedModels = await applyStrategy(timeFilteredModels);
+
+  if (comboStrategy === "lowest-cost" || timeFilteredModels.length !== models.length) {
+    const names = orderedModels.map((m) => (typeof m === "object" && m !== null ? m.model : m)).join(" -> ");
+    log?.info?.("COMBO", `Combo order (${comboStrategy || "fallback"}): ${names}`);
+  }
 
   // Auto-switch: float models that satisfy the request's required capabilities to the front.
   if (autoSwitch) {
     const required = detectRequiredCapabilities(body);
     if (required.size > 0) {
-      const reordered = reorderByCapabilities(rotatedModels, required);
-      if (reordered[0] !== rotatedModels[0]) {
-        log.info("COMBO", `auto-switch for [${[...required].join(",")}] → ${reordered[0]}`);
+      const reordered = reorderByCapabilities(orderedModels, required);
+      const firstOld = typeof orderedModels[0] === "object" && orderedModels[0] !== null ? orderedModels[0].model : orderedModels[0];
+      const firstNew = typeof reordered[0] === "object" && reordered[0] !== null ? reordered[0].model : reordered[0];
+      if (firstNew !== firstOld) {
+        log?.info?.("COMBO", `auto-switch for [${[...required].join(",")}] → ${firstNew}`);
       }
-      rotatedModels = reordered;
+      orderedModels = reordered;
     }
+  }
+
+  // Capability auto-switch above may have moved an undersized item forward.
+  // For every strategy, preserve its relative order but defer models whose
+  // declared input capacity cannot fit this request until the final fallback.
+  if (comboStrategy === "lowest-cost") {
+    orderedModels = reorderByLowestCost(orderedModels, body, estimatedInputTokens);
+  } else {
+    orderedModels = deferModelsExceedingInputLimit(orderedModels, body, estimatedInputTokens);
   }
   
   let lastError = null;
   let earliestRetryAfter = null;
   let lastStatus = null;
 
-  for (let i = 0; i < rotatedModels.length; i++) {
-    const modelStr = rotatedModels[i];
-    log.info("COMBO", `Trying model ${i + 1}/${rotatedModels.length}: ${modelStr}`);
+  for (let i = 0; i < orderedModels.length; i++) {
+    const rawModel = orderedModels[i];
+    const modelStr = typeof rawModel === "object" && rawModel !== null ? rawModel.model : rawModel;
+    log.info("COMBO", `Trying model ${i + 1}/${orderedModels.length}: ${modelStr}`);
 
     try {
-      const result = await handleSingleModel(body, modelStr);
+      const comboBody = { ...body, model: comboName || body?.model };
+      // Internal-only marker for the final response policy. It is intentionally
+      // non-enumerable so it cannot be translated or forwarded upstream.
+      markComboModelRequest(comboBody);
+      const result = await handleSingleModel(comboBody, modelStr);
       
       // Success (2xx) - return response
       if (result.ok) {
@@ -336,7 +636,7 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
 
       if (!shouldFallback) {
         log.warn("COMBO", `Model ${modelStr} failed (no fallback)`, { status: result.status });
-        return result;
+        return publicizeComboFailureResponse(result, errorText, comboName || body?.model);
       }
 
       // For transient errors (503/502/504), wait for cooldown before falling through
@@ -349,12 +649,12 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
       }
 
       // Fallback to next model
-      lastError = errorText || String(result.status);
+      lastError = formatComboErrorForClient(errorText || String(result.status), comboName || body?.model);
       if (!lastStatus) lastStatus = result.status;
       log.warn("COMBO", `Model ${modelStr} failed, trying next`, { status: result.status });
     } catch (error) {
       // Catch unexpected exceptions to ensure fallback continues
-      lastError = error.message || String(error);
+      lastError = formatComboErrorForClient(error.message || String(error), comboName || body?.model);
       if (!lastStatus) lastStatus = 500;
       log.warn("COMBO", `Model ${modelStr} threw error, trying next`, { error: lastError });
     }
@@ -545,7 +845,12 @@ function collectPanel(calls, { minPanel, stragglerGraceMs, panelHardTimeoutMs })
  * @returns {Promise<Response>}
  */
 export async function handleFusionChat({ body, models, handleSingleModel, log, comboName, judgeModel, tuning }) {
-  const panel = Array.isArray(models) ? models.filter(Boolean) : [];
+  // Combo persistence stores per-model routing metadata as objects. Fusion
+  // executes model identifiers only, unlike fallback routing which needs the
+  // metadata for price/limit ordering.
+  const panel = Array.isArray(models)
+    ? models.map((item) => (typeof item === "object" && item !== null ? item.model : item)).filter(Boolean)
+    : [];
   if (panel.length === 0) {
     return new Response(
       JSON.stringify({ error: { message: "Fusion combo has no models" } }),

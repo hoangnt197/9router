@@ -75,6 +75,9 @@ http.createServer = (...args) => {
   const server = origCreate(...rest, wrapped);
   server.once("listening", () => {
     startBackgroundTokenRefreshFromCustomServer();
+    if (typeof process.send === "function") {
+      process.send("ready");
+    }
   });
   const origEmit = server.emit;
   // JBR 25 sends h2c upgrades that the HTTP/1.1 server would otherwise close.

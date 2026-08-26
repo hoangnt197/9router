@@ -29,6 +29,9 @@ export const MEMORY_CONFIG = {
   sessionCleanupIntervalMs: 30 * 60 * 1000,
   dnsCacheTtlMs: 5 * 60 * 1000,
   proxyDispatchersMaxSize: 20,
+  // A ProxyAgent otherwise creates an unbounded pool per destination. Keep the
+  // shared egress proxy from being overwhelmed when clients retry concurrently.
+  proxyConnectionsPerDispatcher: envMs("PROXY_DISPATCHER_CONNECTIONS", 12),
 };
 
 // Parse a positive integer env override, falling back to a default.

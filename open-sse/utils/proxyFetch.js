@@ -226,7 +226,20 @@ async function getDispatcher(proxyUrl) {
       proxyDispatchers.delete(proxyDispatchers.keys().next().value);
     }
     const { ProxyAgent } = await import("undici");
-    proxyDispatchers.set(normalized, new ProxyAgent({ uri: normalized }));
+    proxyDispatchers.set(normalized, new ProxyAgent({
+      uri: normalized,
+      // Limit concurrent CONNECT tunnels per proxy/destination. Without this,
+      // retries can exhaust the SSH proxy tunnel and make every request time out.
+      connections: MEMORY_CONFIG.proxyConnectionsPerDispatcher,
+      pipelining: 1,
+      // Undici defaults a CONNECT/TLS setup to 10s. Codex requests may open
+      // several tunnels concurrently, so allow transient upstream latency
+      // without prematurely turning it into a 502 at LiteLLM.
+      proxyTls: { timeout: 30_000 },
+      requestTls: { timeout: 30_000 },
+      keepAliveTimeout: 5_000,
+      keepAliveMaxTimeout: 10_000,
+    }));
   }
 
   return proxyDispatchers.get(normalized);

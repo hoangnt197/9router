@@ -254,7 +254,14 @@ export async function compressWithHeadroom(body, { enabled, url, model, format, 
   }
 
   try {
-    if (diagnostics) diagnostics.before = captureSizeSnapshot(body);
+    const beforeSnapshot = captureSizeSnapshot(body);
+    if (diagnostics) diagnostics.before = beforeSnapshot;
+
+    // Fast path: skip Headroom HTTP roundtrip for small contexts (<1500 bytes) without tool history
+    if (beforeSnapshot.messageBytes < 1500 && beforeSnapshot.toolHistoryBytes === 0) {
+      setDiagnostic(diagnostics, "skipped: context size below compression threshold (<1.5KB)");
+      return null;
+    }
 
     // Claude shape: translate → OpenAI → compress → translate back.
     if (format === "claude") {

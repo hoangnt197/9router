@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Card, Button, Toggle, Input } from "@/shared/components";
+import { Card, Button, Toggle, Input, Select } from "@/shared/components";
 import Modal, { ConfirmModal } from "@/shared/components/Modal";
 import LanguageSwitcher from "@/shared/components/LanguageSwitcher";
 import { useTheme } from "@/shared/hooks/useTheme";
@@ -1473,19 +1473,27 @@ export default function ProfilePage() {
               </div>
             )}
 
-            {/* Combo Round Robin */}
-            <div className="flex items-start sm:items-center justify-between gap-4 pt-4 border-t border-border/50">
+            {/* Default Combo Strategy */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4 border-t border-border/50">
               <div className="flex-1 min-w-0">
-                <p className="font-medium text-sm sm:text-base">Combo Round Robin</p>
+                <p className="font-medium text-sm sm:text-base">Default Combo Strategy</p>
                 <p className="text-xs sm:text-sm text-text-muted">
-                  Cycle through providers in combos instead of always starting with first
+                  Default execution strategy for model combos
                 </p>
               </div>
-              <Toggle
-                checked={settings.comboStrategy === "round-robin"}
-                onChange={() => updateComboStrategy(settings.comboStrategy === "round-robin" ? "fallback" : "round-robin")}
-                disabled={loading}
-              />
+              <div className="w-full sm:w-[220px]">
+                <Select
+                  options={[
+                    { value: "fallback", label: "Fallback (in order)" },
+                    { value: "lowest-cost", label: "Lowest Cost (cheapest first)" },
+                    { value: "round-robin", label: "Round Robin (rotate)" },
+                  ]}
+                  value={settings.comboStrategy || "fallback"}
+                  onChange={(e) => updateComboStrategy(e.target.value)}
+                  disabled={loading}
+                  selectClassName="py-1.5 text-xs"
+                />
+              </div>
             </div>
 
             {/* Combo Sticky Round Robin Limit */}
@@ -1515,6 +1523,8 @@ export default function ProfilePage() {
                 : "Currently using accounts in priority order (Fill First)."}
               {settings.comboStrategy === "round-robin"
                 ? ` Combos rotate after ${settings.comboStickyRoundRobinLimit || 1} call${(settings.comboStickyRoundRobinLimit || 1) === 1 ? "" : "s"} per model.`
+                : settings.comboStrategy === "lowest-cost"
+                ? " Combos evaluate request cost and route to the lowest-cost model first."
                 : " Combos always start with their first model."}
             </p>
           </div>

@@ -9,10 +9,11 @@ import { AI_PROVIDERS, MEDIA_PROVIDER_KINDS } from "@/shared/constants/providers
 
 // Parse "providerId/model" or just "providerId" → { providerId, model }
 function parseModelEntry(entry) {
-  if (typeof entry !== "string") return { providerId: "", model: "" };
-  const idx = entry.indexOf("/");
-  if (idx < 0) return { providerId: entry, model: "" };
-  return { providerId: entry.slice(0, idx), model: entry.slice(idx + 1) };
+  const str = typeof entry === "object" && entry !== null ? entry.model : entry;
+  if (typeof str !== "string") return { providerId: "", model: "" };
+  const idx = str.indexOf("/");
+  if (idx < 0) return { providerId: str, model: "" };
+  return { providerId: str.slice(0, idx), model: str.slice(idx + 1) };
 }
 
 const VALID_NAME_REGEX = /^[a-zA-Z0-9_.\-]+$/;
@@ -120,16 +121,16 @@ export default function ComboDetailPage() {
 
   const handleAddModel = async (model) => {
     const value = model?.value || model;
-    if (!value || providers.includes(value)) return;
-    const next = [...providers, value];
+    if (!value || providers.some((p) => (typeof p === "object" && p !== null ? p.model : p) === value)) return;
+    const next = [...providers, { model: value, pricingType: "request", price: null, minPrice: null }];
     setProviders(next);
     await saveCombo({ models: next });
   };
 
   const handleDeselectModel = async (model) => {
     const value = model?.value || model;
-    if (!value || !providers.includes(value)) return;
-    const next = providers.filter((p) => p !== value);
+    if (!value || !providers.some((p) => (typeof p === "object" && p !== null ? p.model : p) === value)) return;
+    const next = providers.filter((p) => (typeof p === "object" && p !== null ? p.model : p) !== value);
     setProviders(next);
     await saveCombo({ models: next });
   };
@@ -403,7 +404,7 @@ export default function ComboDetailPage() {
           modelAliases={modelAliases}
           title={`Add ${kindLabel} Model`}
           kindFilter={combo.kind}
-          addedModelValues={providers}
+          addedModelValues={providers.map((p) => (typeof p === "object" && p !== null ? p.model : p))}
           closeOnSelect={false}
         />
       )}

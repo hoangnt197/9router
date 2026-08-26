@@ -29,6 +29,7 @@ import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { stripUnsupportedModalities } from "../translator/concerns/modality.js";
 import { prefetchRemoteImages } from "../translator/concerns/prefetch.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
+import { preserveComboModelMarker } from "../utils/reasoningUsagePolicy.js";
 
 /**
  * Core chat handler - shared between SSE and Worker
@@ -101,11 +102,11 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     const mode = providerThinking.mode;
     if (mode === "on" && !body.thinking) {
       console.log("Injecting provider-level thinking config override: on");
-      body = { ...body, thinking: { type: "enabled", budget_tokens: 10000 } };
+      body = preserveComboModelMarker(body, { ...body, thinking: { type: "enabled", budget_tokens: 10000 } });
     } else if (mode === "off" && !body.thinking) {
-      body = { ...body, thinking: { type: "disabled" } };
+      body = preserveComboModelMarker(body, { ...body, thinking: { type: "disabled" } });
     } else if (!body.reasoning_effort) {
-      body = { ...body, reasoning_effort: mode };
+      body = preserveComboModelMarker(body, { ...body, reasoning_effort: mode });
     }
   }
 
@@ -358,6 +359,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       provider, model, connectionId,
       latency: { ttft: 0, total: Date.now() - requestStartTime },
       tokens: { prompt_tokens: 0, completion_tokens: 0 },
+      headers: clientRawRequest?.headers,
       request: extractRequestConfig(body, stream),
       providerRequest: translatedBody || null,
       response: { error: error.message || String(error), status: error.name === "AbortError" ? 499 : 502, thinking: null },
@@ -422,6 +424,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       provider, model, connectionId,
       latency: { ttft: 0, total: Date.now() - requestStartTime },
       tokens: { prompt_tokens: 0, completion_tokens: 0 },
+      headers: clientRawRequest?.headers,
       request: extractRequestConfig(body, stream),
       providerRequest: finalBody || translatedBody || null,
       response: { error: message, status: statusCode, thinking: null },
@@ -438,7 +441,8 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     return createErrorResult(statusCode, errMsg, resetsAtMs);
   }
 
-  const sharedCtx = { provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, pxpipe: pxpipeSummary, reqTag, log };
+  const clientRequestedModel = body?.model ? stripThinkingSuffix(body.model) : stripThinkingSuffix(model);
+  const sharedCtx = { provider, model, clientRequestedModel, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, pxpipe: pxpipeSummary, reqTag, log };
   const appendLog = (extra) => appendRequestLog({ model, provider, connectionId, ...extra }).catch(() => { });
   const trackDone = () => trackPendingRequest(model, provider, connectionId, false);
 

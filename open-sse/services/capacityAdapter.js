@@ -9,6 +9,7 @@
  * never overrides a combo that already has a member covering the capability.
  */
 import { getCapabilitiesForModel } from "../providers/capabilities.js";
+import { preserveComboModelMarker } from "../utils/reasoningUsagePolicy.js";
 
 const CAPABILITY_KEYS = ["vision", "pdf", "audioInput", "videoInput"];
 const HARD_CAPS = new Set(CAPABILITY_KEYS);
@@ -75,7 +76,9 @@ export function getActiveAdapterStrategy(requiredCapabilities, settings) {
   return "fallback";
 }
 
-function modelSatisfies(modelStr, requiredHard) {
+function modelSatisfies(modelItem, requiredHard) {
+  const modelStr = typeof modelItem === "object" && modelItem !== null ? modelItem.model : modelItem;
+  if (!modelStr || typeof modelStr !== "string") return false;
   const slash = modelStr.indexOf("/");
   const provider = slash > 0 ? modelStr.slice(0, slash) : "";
   const model = slash > 0 ? modelStr.slice(slash + 1) : modelStr;
@@ -94,7 +97,8 @@ export function augmentModelsWithCapacityAdapter(models, requiredCapabilities, s
   if (hard.length === 0 || !Array.isArray(models) || models.length === 0) return models;
   if (models.some((m) => modelSatisfies(m, hard))) return models;
 
-  const pool = getCapacityAdapterModels(settings).filter((m) => !models.includes(m) && modelSatisfies(m, hard));
+  const existingNames = new Set(models.map((m) => (typeof m === "object" && m !== null ? m.model : m)));
+  const pool = getCapacityAdapterModels(settings).filter((m) => !existingNames.has(m) && modelSatisfies(m, hard));
   if (pool.length === 0) return models;
   return [...pool, ...models];
 }
@@ -166,7 +170,7 @@ export function withCapacityAdapterStripping(handleSingleModel, adapterModels) {
       const provider = slash > 0 ? modelStr.slice(0, slash) : "";
       const model = slash > 0 ? modelStr.slice(slash + 1) : modelStr;
       const { contextWindow } = getCapabilitiesForModel(provider, model);
-      body = stripHistoryForContext(body, contextWindow);
+      body = preserveComboModelMarker(body, stripHistoryForContext(body, contextWindow));
     }
     return handleSingleModel(body, modelStr, ...rest);
   };

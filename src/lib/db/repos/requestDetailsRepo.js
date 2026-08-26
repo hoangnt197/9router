@@ -1,11 +1,12 @@
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 
-const DEFAULT_MAX_RECORDS = 200;
+const DEFAULT_MAX_RECORDS = 2000;
 const DEFAULT_BATCH_SIZE = 20;
 const DEFAULT_FLUSH_INTERVAL_MS = 5000;
 const DEFAULT_MAX_JSON_SIZE = 5 * 1024;
 const CONFIG_CACHE_TTL_MS = 5000;
+const PURGE_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 
 let cachedConfig = null;
 let cachedConfigTs = 0;
@@ -85,6 +86,37 @@ function truncateField(obj, maxSize) {
   return obj || {};
 }
 
+export async function purgeOldRequestDetails() {
+  try {
+    const db = await getAdapter();
+    const config = await getObservabilityConfig();
+    const maxRecords = config.maxRecords || DEFAULT_MAX_RECORDS;
+
+    const cnt = db.get(`SELECT COUNT(*) as c FROM requestDetails`);
+    if (cnt && cnt.c > maxRecords) {
+      db.run(
+        `DELETE FROM requestDetails WHERE id IN (SELECT id FROM requestDetails ORDER BY timestamp ASC LIMIT ?)`,
+        [cnt.c - maxRecords]
+      );
+    }
+  } catch (e) {
+    console.error("[requestDetailsRepo] Background purge error:", e.message);
+  }
+}
+
+// Background periodic purge scheduler (runs every 10 minutes)
+if (!global._requestDetailsPurgeTimer) {
+  global._requestDetailsPurgeTimer = setInterval(() => {
+    purgeOldRequestDetails().catch(() => {});
+  }, PURGE_INTERVAL_MS);
+  global._requestDetailsPurgeTimer.unref?.();
+
+  // Initial purge after startup (30s)
+  setTimeout(() => {
+    purgeOldRequestDetails().catch(() => {});
+  }, 30000)?.unref?.();
+}
+
 async function flushToDatabase() {
   if (isFlushing) return;
   if (writeBuffer.length === 0) return;
@@ -100,7 +132,7 @@ async function flushToDatabase() {
         for (const item of items) {
           if (!item.id) item.id = generateDetailId(item.model);
           if (!item.timestamp) item.timestamp = new Date().toISOString();
-          if (item.request?.headers) item.request.headers = sanitizeHeaders(item.request.headers);
+          const headers = sanitizeHeaders(item.headers || item.request?.headers);
 
           const record = {
             id: item.id,
@@ -111,6 +143,7 @@ async function flushToDatabase() {
             status: item.status || null,
             latency: item.latency || {},
             tokens: item.tokens || {},
+            headers,
             request: truncateField(item.request, config.maxJsonSize),
             providerRequest: truncateField(item.providerRequest, config.maxJsonSize),
             providerResponse: truncateField(item.providerResponse, config.maxJsonSize),
@@ -121,14 +154,6 @@ async function flushToDatabase() {
           db.run(
             `INSERT INTO requestDetails(id, timestamp, provider, model, connectionId, status, data) VALUES(?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET timestamp = excluded.timestamp, provider = excluded.provider, model = excluded.model, connectionId = excluded.connectionId, status = excluded.status, data = excluded.data`,
             [record.id, record.timestamp, record.provider, record.model, record.connectionId, record.status, stringifyJson(record)]
-          );
-        }
-
-        const cnt = db.get(`SELECT COUNT(*) as c FROM requestDetails`);
-        if (cnt && cnt.c > config.maxRecords) {
-          db.run(
-            `DELETE FROM requestDetails WHERE id IN (SELECT id FROM requestDetails ORDER BY timestamp ASC LIMIT ?)`,
-            [cnt.c - config.maxRecords]
           );
         }
       });

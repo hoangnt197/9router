@@ -61,7 +61,12 @@ const DEFAULT_SETTINGS = {
   pxpipeAutoInstall: true,
   pxpipeMinChars: 25000,
   pxpipeTimeoutMs: 15000,
+  enableCyberFilter: true,
 };
+
+let cachedMergedSettings = null;
+let cachedMergedSettingsTs = 0;
+const SETTINGS_CACHE_TTL_MS = 30000;
 
 async function readRaw() {
   const db = await getAdapter();
@@ -89,8 +94,20 @@ export function mergeWithDefaults(raw) {
 }
 
 export async function getSettings() {
+  if (cachedMergedSettings && (Date.now() - cachedMergedSettingsTs) < SETTINGS_CACHE_TTL_MS) {
+    return cachedMergedSettings;
+  }
   const raw = await readRaw();
-  return mergeWithDefaults(raw);
+  const merged = mergeWithDefaults(raw);
+  cachedMergedSettings = merged;
+  cachedMergedSettingsTs = Date.now();
+  return merged;
+}
+
+// Invalidate settings cache
+export function invalidateSettingsCache() {
+  cachedMergedSettings = null;
+  cachedMergedSettingsTs = 0;
 }
 
 // Atomic read-merge-write inside transaction (prevents losing concurrent updates)
@@ -106,7 +123,10 @@ export async function updateSettings(updates) {
       [stringifyJson(next)],
     );
   });
-  return mergeWithDefaults(next);
+  const merged = mergeWithDefaults(next);
+  cachedMergedSettings = merged;
+  cachedMergedSettingsTs = Date.now();
+  return merged;
 }
 
 export async function isCloudEnabled() {

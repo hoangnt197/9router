@@ -47,7 +47,7 @@ export function geminiToOpenAIResponse(chunk, state) {
   // Initialize state
   if (!state.messageId) {
     state.messageId = response.responseId || `msg_${Date.now()}`;
-    state.model = response.modelVersion || "gemini";
+    state.model = state.model || response.modelVersion || "gemini";
     state.functionIndex = 0;
     state.geminiToolCallCount = 0;
     results.push(buildChunk(chunkMeta(state), { role: ROLE.ASSISTANT }, null));

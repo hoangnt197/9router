@@ -3,6 +3,7 @@
  */
 
 import { FORMATS } from "../translator/formats.js";
+import { estimateInputTokens as estimateTokenizedInput } from "./inputTokenEstimator.js";
 
 // Legacy per-chunk usage console line; off by default (superseded by "📊 done")
 const DEBUG_USAGE = process.env.LOG_USAGE_VERBOSE === "1";
@@ -130,7 +131,16 @@ export function normalizeUsage(usage) {
   assignNumber("cache_read_input_tokens", usage?.cache_read_input_tokens);
   assignNumber("cache_creation_input_tokens", usage?.cache_creation_input_tokens);
   assignNumber("cached_tokens", usage?.cached_tokens);
-  assignNumber("reasoning_tokens", usage?.reasoning_tokens);
+  // Providers report reasoning either as a top-level field or nested below
+  // the OpenAI usage-details object. Promote the nested value so storage and
+  // cost accounting use the same canonical field for Chat Completions and
+  // Responses API payloads.
+  assignNumber(
+    "reasoning_tokens",
+    usage?.reasoning_tokens
+      ?? usage?.completion_tokens_details?.reasoning_tokens
+      ?? usage?.output_tokens_details?.reasoning_tokens,
+  );
 
   // Preserve nested details objects for OpenAI format forwarding
   if (usage?.prompt_tokens_details && typeof usage.prompt_tokens_details === "object") {
@@ -138,6 +148,9 @@ export function normalizeUsage(usage) {
   }
   if (usage?.completion_tokens_details && typeof usage.completion_tokens_details === "object") {
     normalized.completion_tokens_details = usage.completion_tokens_details;
+  }
+  if (usage?.output_tokens_details && typeof usage.output_tokens_details === "object") {
+    normalized.output_tokens_details = usage.output_tokens_details;
   }
 
   if (Object.keys(normalized).length === 0) return null;
@@ -267,7 +280,8 @@ export function extractUsage(chunk) {
       prompt_tokens: usage.input_tokens || usage.prompt_tokens || 0,
       completion_tokens: usage.output_tokens || usage.completion_tokens || 0,
       cached_tokens: cachedTokens,
-      reasoning_tokens: usage.output_tokens_details?.reasoning_tokens,
+      reasoning_tokens: usage.output_tokens_details?.reasoning_tokens
+        ?? usage.completion_tokens_details?.reasoning_tokens,
       prompt_tokens_details: cachedTokens ? { cached_tokens: cachedTokens } : undefined
     });
   }
@@ -278,7 +292,8 @@ export function extractUsage(chunk) {
       prompt_tokens: chunk.usage.prompt_tokens,
       completion_tokens: chunk.usage.completion_tokens || 0,
       cached_tokens: chunk.usage.prompt_tokens_details?.cached_tokens || chunk.usage.prompt_cache_hit_tokens,
-      reasoning_tokens: chunk.usage.completion_tokens_details?.reasoning_tokens,
+      reasoning_tokens: chunk.usage.completion_tokens_details?.reasoning_tokens
+        ?? chunk.usage.output_tokens_details?.reasoning_tokens,
       prompt_tokens_details: chunk.usage.prompt_tokens_details,
       completion_tokens_details: chunk.usage.completion_tokens_details
     });
@@ -336,19 +351,7 @@ export function mergeUsage(prev, next) {
  * Calculate total body size for more accurate estimation
  */
 export function estimateInputTokens(body) {
-  if (!body || typeof body !== "object") return 0;
-
-  try {
-    // Calculate total body size (includes messages, tools, system, thinking config, etc.)
-    const bodyStr = JSON.stringify(body);
-    const totalChars = bodyStr.length;
-
-    // Estimate: ~4 chars per token (rough average across all tokenizers)
-    return Math.ceil(totalChars / 4);
-  } catch (err) {
-    // Fallback if stringify fails
-    return 0;
-  }
+  return estimateTokenizedInput(body);
 }
 
 /**

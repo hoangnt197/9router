@@ -108,10 +108,11 @@ function ComboList({ combos }) {
               <code className="text-sm font-mono font-medium flex-1 truncate">{combo.name}</code>
               <div className="flex flex-wrap items-center gap-1 sm:shrink-0">
                 {combo.models.slice(0, 6).map((entry, i) => {
-                  const pid = typeof entry === "string" ? entry.split("/")[0] : "";
+                  const modelName = typeof entry === "object" && entry !== null ? entry.model : entry;
+                  const pid = typeof modelName === "string" ? modelName.split("/")[0] : "";
                   const p = AI_PROVIDERS[pid];
                   return (
-                    <div key={`${entry}-${i}`} title={p?.name || entry} className="size-5 rounded flex items-center justify-center" style={{ backgroundColor: `${(p?.color ?? "#888")}15` }}>
+                    <div key={`${modelName}-${i}`} title={p?.name || modelName} className="size-5 rounded flex items-center justify-center" style={{ backgroundColor: `${(p?.color ?? "#888")}15` }}>
                       <ProviderIcon
                         src={`/providers/${pid}.png`}
                         alt={p?.name || pid}

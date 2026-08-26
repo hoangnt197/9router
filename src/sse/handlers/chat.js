@@ -15,6 +15,7 @@ import { getTransform as getPxpipeTransform } from "@/lib/pxpipe/loader.js";
 import { appendPxpipeEvent } from "@/lib/pxpipe/events.js";
 import { errorResponse, unavailableResponse } from "open-sse/utils/error.js";
 import { handleComboChat, handleFusionChat, detectRequiredCapabilities } from "open-sse/services/combo.js";
+import { preserveComboModelMarker } from "open-sse/utils/reasoningUsagePolicy.js";
 import { augmentModelsWithCapacityAdapter, withCapacityAdapterStripping, getActiveAdapterStrategy } from "open-sse/services/capacityAdapter.js";
 import { handleBypassRequest } from "open-sse/utils/bypassHandler.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
@@ -22,6 +23,7 @@ import { detectFormatByEndpoint } from "open-sse/translator/formats.js";
 import * as log from "../utils/logger.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { getProjectIdForConnection } from "open-sse/services/projectId.js";
+import { checkBlockingRule, createBlockedResponse } from "../services/cyberFilter.js";
 
 /**
  * Handle chat completion request
@@ -79,6 +81,17 @@ export async function handleChat(request, clientRawRequest = null) {
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing model");
   }
 
+  // Check cyber abuse blocking rules (Shortlab Cyber Filter)
+  if (settings.enableCyberFilter !== false) {
+    const blockingRule = checkBlockingRule(body);
+    if (blockingRule) {
+      const sourceIp = request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip") || "";
+      const url = new URL(request.url);
+      log.warn("CYBER_FILTER", `Blocked request matching rule [${blockingRule}]`);
+      return createBlockedResponse(body, blockingRule, url.pathname, sourceIp);
+    }
+  }
+
   // Bypass naming/warmup requests before combo rotation to avoid wasting rotation slots
   const userAgent = request?.headers?.get("user-agent") || "";
   const bypassResponse = handleBypassRequest(body, modelStr, userAgent, !!settings.ccFilterNaming);
@@ -94,7 +107,10 @@ export async function handleChat(request, clientRawRequest = null) {
     const comboSpecificStrategy = comboStrategies[modelStr]?.fallbackStrategy;
     const comboStrategy = comboSpecificStrategy || settings.comboStrategy || "fallback";
     const augmentedModels = augmentModelsWithCapacityAdapter(comboModels, requiredCapabilities, settings);
-    const adapterAdded = augmentedModels.filter((m) => !comboModels.includes(m));
+    const comboNames = new Set(comboModels.map((m) => (typeof m === "object" && m !== null ? m.model : m)));
+    const adapterAdded = augmentedModels
+      .map((m) => (typeof m === "object" && m !== null ? m.model : m))
+      .filter((name) => !comboNames.has(name));
 
     if (comboStrategy === "fusion") {
       log.info("CHAT", `Combo "${modelStr}" with ${comboModels.length} models (strategy: fusion)`);
@@ -128,7 +144,7 @@ export async function handleChat(request, clientRawRequest = null) {
       log,
       comboName: modelStr,
       comboStrategy,
-      comboStickyLimit
+      comboStickyLimit,
     });
   }
 
@@ -171,8 +187,10 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       const comboStrategy = comboSpecificStrategy || chatSettings.comboStrategy || "fallback";
       const requiredCapabilities = detectRequiredCapabilities(body);
       const augmentedModels = augmentModelsWithCapacityAdapter(comboModels, requiredCapabilities, chatSettings);
-      const adapterAdded = augmentedModels.filter((m) => !comboModels.includes(m));
-
+      const comboNames = new Set(comboModels.map((m) => (typeof m === "object" && m !== null ? m.model : m)));
+      const adapterAdded = augmentedModels
+        .map((m) => (typeof m === "object" && m !== null ? m.model : m))
+        .filter((name) => !comboNames.has(name));
       if (comboStrategy === "fusion") {
         log.info("CHAT", `Combo "${modelStr}" with ${comboModels.length} models (strategy: fusion)`);
         return handleFusionChat({
@@ -205,7 +223,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         log,
         comboName: modelStr,
         comboStrategy,
-        comboStickyLimit
+        comboStickyLimit,
       });
     }
     log.warn("CHAT", "Invalid model format", { model: modelStr });
@@ -260,7 +278,9 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
     const chatSettings = await getSettings();
     const providerThinking = (chatSettings.providerThinking || {})[provider] || null;
     const result = await handleChatCore({
-      body: { ...body, model: `${provider}/${model}` },
+      // Retain the non-enumerable combo marker across this internal copy. It is
+      // consumed only by response usage policy and never reaches the provider.
+      body: preserveComboModelMarker(body, { ...body, model: body.model || `${provider}/${model}` }),
       modelInfo: { provider, model },
       credentials: refreshedCredentials,
       log,

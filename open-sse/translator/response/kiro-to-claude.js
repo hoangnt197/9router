@@ -92,7 +92,7 @@ export function kiroToClaudeResponse(chunk, state) {
     state.messageId =
       (typeof data.id === "string" && data.id.replace("chatcmpl-", "")) ||
       `msg_${Date.now()}`;
-    state.model = data.model || "kiro";
+    state.model = state.model || data.model || "kiro";
     state.nextBlockIndex = 0;
     results.push({
       type: "message_start",

@@ -456,6 +456,22 @@ export default function RequestDetailsTab() {
             )}
 
             <div className="space-y-4">
+              {/* Request Headers */}
+              {selectedDetail.headers && Object.keys(selectedDetail.headers).length > 0 && (
+                <CollapsibleSection title="Request Headers" defaultOpen={true} icon="tune">
+                  <div className="max-h-[260px] max-w-full overflow-auto rounded-lg border border-black/5 bg-black/5 p-3 font-mono text-xs dark:border-white/5 dark:bg-white/5 sm:p-4">
+                    <div className="flex flex-col gap-1.5">
+                      {Object.entries(selectedDetail.headers).map(([k, v]) => (
+                        <div key={k} className="flex flex-col sm:flex-row sm:items-baseline gap-0.5 sm:gap-2 pb-1 border-b border-black/5 dark:border-white/5 last:border-0 last:pb-0">
+                          <span className="text-primary font-semibold shrink-0 select-all">{k}:</span>
+                          <span className="text-text-main break-all select-all font-mono opacity-90">{String(v)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </CollapsibleSection>
+              )}
+
               <CollapsibleSection title="1. Client Request (Input)" defaultOpen={true} icon="input">
                 <pre className="max-h-[300px] max-w-full overflow-auto rounded-lg border border-black/5 bg-black/5 p-3 font-mono text-xs text-text-main dark:border-white/5 dark:bg-white/5 sm:p-4">
                   {JSON.stringify(selectedDetail.request, null, 2)}

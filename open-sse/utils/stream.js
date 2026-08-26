@@ -6,7 +6,9 @@ import { parseSSELine, hasValuableContent, fixInvalidId, formatSSE } from "./str
 import { getOpenAIResponsesEventName, isOpenAIResponsesTerminalEvent, formatIncompleteOpenAIResponsesStreamFailure } from "./responsesStreamHelpers.js";
 import { dbg, isDebugEnabled } from "./debugLog.js";
 
+import { stripThinkingSuffix } from "../translator/concerns/thinkingUnified.js";
 import { SSE_DONE, SSE_HEADERS, SSE_HEADERS_NO_BUFFER } from "./sseConstants.js";
+import { applyResponsePolicy, createReasoningUsagePolicy } from "./reasoningUsagePolicy.js";
 
 export { COLORS, formatSSE };
 export { SSE_DONE, SSE_HEADERS, SSE_HEADERS_NO_BUFFER };
@@ -58,8 +60,9 @@ export function createSSEStream(options = {}) {
   // Per-stream decoder with stream:true to correctly handle multi-byte chars split across chunks
   const decoder = new TextDecoder("utf-8", { fatal: false });
 
+  const effectiveModel = body?.model || stripThinkingSuffix(model);
   const state = mode === STREAM_MODE.TRANSLATE
-    ? { ...initState(sourceFormat), provider, toolNameMap, customToolNames: new Set(customToolNames || []), model }
+    ? { ...initState(sourceFormat), provider, toolNameMap, customToolNames: new Set(customToolNames || []), model: effectiveModel }
     : null;
 
   let totalContentLength = 0;
@@ -68,6 +71,7 @@ export function createSSEStream(options = {}) {
   let ttftAt = null;
   let sseLineCount = 0;
   let sseEmittedCount = 0;
+  const responsePolicy = createReasoningUsagePolicy(body, model);
   const eventTypeCounts = {};
 
   // Track Responses API event framing for same-format passthrough (codex)
@@ -147,8 +151,12 @@ export function createSSEStream(options = {}) {
                 }
               }
 
-              if (!hasValuableContent(parsed, FORMATS.OPENAI)) {
-                continue;
+              if (parsed?.model && typeof parsed.model === "string") {
+                const targetModel = body?.model || stripThinkingSuffix(parsed.model);
+                if (parsed.model !== targetModel) {
+                  parsed.model = targetModel;
+                  fieldsInjected = true;
+                }
               }
 
               const delta = parsed.choices?.[0]?.delta;
@@ -172,17 +180,29 @@ export function createSSEStream(options = {}) {
               if (isFinishChunk && !hasValidUsage(parsed.usage)) {
                 const estimated = estimateUsage(body, totalContentLength, FORMATS.OPENAI);
                 parsed.usage = filterUsageForFormat(estimated, FORMATS.OPENAI);
-                output = `data: ${JSON.stringify(parsed)}\n`;
                 usage = estimated;
                 injectedUsage = true;
               } else if (isFinishChunk && usage) {
                 const buffered = addBufferToUsage(usage);
                 parsed.usage = filterUsageForFormat(buffered, FORMATS.OPENAI);
-                output = `data: ${JSON.stringify(parsed)}\n`;
                 injectedUsage = true;
               } else if (idFixed || fieldsInjected) {
-                output = `data: ${JSON.stringify(parsed)}\n`;
                 injectedUsage = true;
+              }
+
+              // Apply public model naming and usage adjustment exactly once,
+              // after a terminal usage payload has been synthesized/buffered.
+              applyResponsePolicy(parsed, responsePolicy);
+              if (isFinishChunk) {
+                usage = extractUsage(parsed) || usage;
+              }
+
+              if (!hasValuableContent(parsed, FORMATS.OPENAI)) {
+                continue;
+              }
+
+              if (injectedUsage || idFixed || fieldsInjected) {
+                output = `data: ${JSON.stringify(parsed)}\n`;
               }
             } catch {
               // Skip non-JSON data lines silently — don't forward garbage to clients.
@@ -287,6 +307,9 @@ export function createSSEStream(options = {}) {
 
         // Responses same-format passthrough: re-emit with original event framing
         if (keepsOpenAIResponsesFormat && openAIResponsesEventName) {
+          applyResponsePolicy(parsed, responsePolicy);
+          const adjustedUsage = extractUsage(parsed);
+          if (adjustedUsage) state.usage = adjustedUsage;
           const output = formatSSE({ event: openAIResponsesEventName, data: parsed }, sourceFormat);
           reqLogger?.appendConvertedChunk?.(output);
           controller.enqueue(sharedEncoder.encode(output));
@@ -326,6 +349,14 @@ export function createSSEStream(options = {}) {
               // Add buffer and filter usage for client (but keep original in state.usage for logging)
               const buffered = addBufferToUsage(state.usage);
               item.usage = filterUsageForFormat(buffered, sourceFormat);
+            }
+
+            // Do this after terminal usage injection so random/scaled reasoning
+            // is applied once to both the client event and persisted usage.
+            applyResponsePolicy(item, responsePolicy);
+            if (state.finishReason && isFinishChunk) {
+              const adjustedUsage = extractUsage(item);
+              if (adjustedUsage) state.usage = adjustedUsage;
             }
 
             const output = formatSSE(item, sourceFormat);
@@ -401,6 +432,7 @@ export function createSSEStream(options = {}) {
             if (translated?.length > 0) {
               for (const item of translated) {
                 if (item === null || item === undefined) continue;
+                applyResponsePolicy(item, responsePolicy);
                 const output = formatSSE(item, sourceFormat);
                 reqLogger?.appendConvertedChunk?.(output);
                 controller.enqueue(sharedEncoder.encode(output));
@@ -421,6 +453,7 @@ export function createSSEStream(options = {}) {
         if (flushed?.length > 0) {
           for (const item of flushed) {
             if (item === null || item === undefined) continue;
+            applyResponsePolicy(item, responsePolicy);
             const output = formatSSE(item, sourceFormat);
             reqLogger?.appendConvertedChunk?.(output);
             controller.enqueue(sharedEncoder.encode(output));

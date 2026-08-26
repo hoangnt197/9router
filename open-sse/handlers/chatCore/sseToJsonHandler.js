@@ -5,6 +5,8 @@ import { FORMATS } from "../../translator/formats.js";
 import { PROVIDERS } from "../../config/providers.js";
 import { buildRequestDetail, extractRequestConfig, saveUsageStats, formatDoneLine } from "./requestDetail.js";
 import { ROLE, RESPONSES_ITEM } from "../../translator/schema/index.js";
+import { stripThinkingSuffix } from "../../translator/concerns/thinkingUnified.js";
+import { applyResponsePolicy, createReasoningUsagePolicy, publicModelName } from "../../utils/reasoningUsagePolicy.js";
 
 // Responses-API providers (e.g. codex) may emit SSE without content-type + use Responses output shape
 const isResponsesProvider = (p) => PROVIDERS[p]?.format === FORMATS.OPENAI_RESPONSES;
@@ -168,7 +170,7 @@ export function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
     id: first.id || `chatcmpl-${Date.now()}`,
     object: "chat.completion",
     created: first.created || Math.floor(Date.now() / 1000),
-    model: first.model || fallbackModel || "unknown",
+    model: fallbackModel ? stripThinkingSuffix(fallbackModel) : stripThinkingSuffix(first.model || "unknown"),
     choices: [{ index: 0, message, finish_reason: finishReason }]
   };
   if (usage) result.usage = usage;
@@ -179,7 +181,7 @@ export function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
  * Handle case: provider forced streaming but client wants JSON.
  * Supports both Codex/Responses API SSE and standard Chat Completions SSE.
  */
-export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, customToolNames, trackDone, appendLog, reqTag, log }) {
+export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, clientRequestedModel, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, customToolNames, trackDone, appendLog, reqTag, log }) {
   const contentType = providerResponse.headers.get("content-type") || "";
   const isSSE = contentType.includes("text/event-stream") || (contentType === "" && isResponsesProvider(provider));
   if (!isSSE) return null; // not handled here
@@ -188,6 +190,7 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
 
   const ctx = {
     provider, model, connectionId,
+    headers: clientRawRequest?.headers,
     request: extractRequestConfig(body, stream),
     providerRequest: finalBody || translatedBody || null
   };
@@ -202,9 +205,13 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
       const jsonResponse = await convertResponsesStreamToJson(providerResponse.body);
       if (onRequestSuccess) await onRequestSuccess();
 
+      // This path bypasses the normal streaming/non-streaming handlers, so it
+      // must apply the same combo model naming and reasoning usage policy here.
+      applyResponsePolicy(jsonResponse, createReasoningUsagePolicy(body, model));
+
       const usage = jsonResponse.usage || {};
       appendLog({ tokens: usage, status: "200 OK" });
-      saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, silent: true });
+      saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, requestBody: finalBody || translatedBody || body, silent: true });
       if (log?.line) log.line(reqTag, "📊", formatDoneLine({ usage, latency: { total: Date.now() - requestStartTime } }));
 
       // Same cache-inclusive total for the recorded detail, so the DB and the
@@ -225,6 +232,9 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
 
       // Client is Responses API → return as-is
       if (sourceFormat === FORMATS.OPENAI_RESPONSES) {
+        if (jsonResponse && typeof jsonResponse === "object") {
+          jsonResponse.model = publicModelName(clientRequestedModel || body?.model || jsonResponse.model || model);
+        }
         return { success: true, response: new Response(JSON.stringify(jsonResponse), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }) };
       }
 
@@ -238,6 +248,8 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
       const cacheCreate = usage.cache_creation_input_tokens || 0;
       const inTokens = (usage.input_tokens || 0) + cacheRead + cacheCreate;
       const outTokens = usage.output_tokens || 0;
+      const reasoningTokens = usage.output_tokens_details?.reasoning_tokens
+        ?? usage.completion_tokens_details?.reasoning_tokens;
       const cacheDetails = (cacheRead > 0 || cacheCreate > 0)
         ? { prompt_tokens_details: {
               ...(cacheRead > 0 ? { cached_tokens: cacheRead } : {}),
@@ -261,8 +273,13 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
         finalResp = {
           response: {
             candidates: [{ content: { role: "model", parts: [{ text: textContent || "" }] }, finishReason: "STOP", index: 0 }],
-            usageMetadata: { promptTokenCount: inTokens, candidatesTokenCount: outTokens, totalTokenCount: inTokens + outTokens },
-            modelVersion: model,
+            usageMetadata: {
+              promptTokenCount: inTokens,
+              candidatesTokenCount: outTokens,
+              totalTokenCount: inTokens + outTokens,
+              ...(Number.isFinite(reasoningTokens) ? { thoughtsTokenCount: reasoningTokens } : {}),
+            },
+            modelVersion: publicModelName(clientRequestedModel || body?.model || model),
             responseId: jsonResponse.id || `resp_${Date.now()}`
           }
         };
@@ -275,9 +292,15 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
           id: jsonResponse.id || `chatcmpl-${Date.now()}`,
           object: "chat.completion",
           created: jsonResponse.created_at || Math.floor(Date.now() / 1000),
-          model: jsonResponse.model || model,
+          model: publicModelName(clientRequestedModel || body?.model || jsonResponse.model || model),
           choices: [{ index: 0, message, finish_reason: finishReason }],
-          usage: { prompt_tokens: inTokens, completion_tokens: outTokens, total_tokens: inTokens + outTokens, ...cacheDetails }
+          usage: {
+            prompt_tokens: inTokens,
+            completion_tokens: outTokens,
+            total_tokens: inTokens + outTokens,
+            ...cacheDetails,
+            ...(Number.isFinite(reasoningTokens) ? { completion_tokens_details: { reasoning_tokens: reasoningTokens } } : {}),
+          }
         };
       }
 
@@ -291,7 +314,7 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
   // Standard Chat Completions SSE path
   try {
     const sseText = await providerResponse.text();
-    const parsed = parseSSEToOpenAIResponse(sseText, model);
+    const parsed = parseSSEToOpenAIResponse(sseText, clientRequestedModel || body?.model || model);
     if (!parsed) return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Invalid SSE response for non-streaming request");
     if (parsed.error) {
       return createErrorResult(
@@ -302,9 +325,11 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
 
     if (onRequestSuccess) await onRequestSuccess();
 
+    applyResponsePolicy(parsed, createReasoningUsagePolicy(body, model));
+
     const usage = parsed.usage || {};
     appendLog({ tokens: usage, status: "200 OK" });
-    saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, silent: true });
+    saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, requestBody: finalBody || translatedBody || body, silent: true });
     if (log?.line) log.line(reqTag, "📊", formatDoneLine({ usage, latency: { total: Date.now() - requestStartTime } }));
 
     const totalLatency = Date.now() - requestStartTime;
