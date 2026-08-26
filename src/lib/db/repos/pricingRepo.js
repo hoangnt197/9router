@@ -1,14 +1,15 @@
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 import { makeKv } from "../helpers/kvStore.js";
+import { bumpSharedVersion, getSharedVersion } from "../../cluster/redisState.js";
 
 const pricingKv = makeKv("pricing");
 const CACHE_TTL_MS = 5000;
 
-let cache = { value: null, expiresAt: 0 };
+let cache = { value: null, expiresAt: 0, version: null };
 
 function invalidate() {
-  cache = { value: null, expiresAt: 0 };
+  cache = { value: null, expiresAt: 0, version: null };
 }
 
 async function getUserPricing() {
@@ -17,7 +18,8 @@ async function getUserPricing() {
 
 export async function getPricing() {
   const now = Date.now();
-  if (cache.value && cache.expiresAt > now) return cache.value;
+  const sharedVersion = await getSharedVersion("pricing");
+  if (cache.value && cache.expiresAt > now && (!sharedVersion || sharedVersion === cache.version)) return cache.value;
 
   const userPricing = await getUserPricing();
   const { PROVIDER_PRICING } = await import("open-sse/providers/pricing.js");
@@ -44,7 +46,7 @@ export async function getPricing() {
     }
   }
 
-  cache = { value: merged, expiresAt: now + CACHE_TTL_MS };
+  cache = { value: merged, expiresAt: now + CACHE_TTL_MS, version: sharedVersion };
   return merged;
 }
 
@@ -59,20 +61,21 @@ export async function getPricingForModel(provider, model) {
 // Atomic merge inside transaction (per-provider read-modify-write)
 export async function updatePricing(pricingData) {
   const db = await getAdapter();
-  db.transaction(() => {
+  await db.transaction(async (tx) => {
     for (const [provider, models] of Object.entries(pricingData)) {
-      const row = db.get(`SELECT value FROM kv WHERE scope = 'pricing' AND key = ?`, [provider]);
+      const row = await tx.get(`SELECT value FROM kv WHERE scope = 'pricing' AND key = ?`, [provider]);
       const current = row ? (parseJson(row.value, {}) || {}) : {};
       const merged = { ...current };
       for (const [model, pricing] of Object.entries(models)) {
         merged[model] = pricing;
       }
-      db.run(
+      await tx.run(
         `INSERT INTO kv(scope, key, value) VALUES('pricing', ?, ?) ON CONFLICT(scope, key) DO UPDATE SET value = excluded.value`,
         [provider, stringifyJson(merged)]
       );
     }
   });
+  await bumpSharedVersion("pricing");
   invalidate();
   return await getUserPricing();
 }
@@ -80,29 +83,31 @@ export async function updatePricing(pricingData) {
 export async function resetPricing(provider, model) {
   if (!provider) return await getUserPricing();
   const db = await getAdapter();
-  db.transaction(() => {
+  await db.transaction(async (tx) => {
     if (!model) {
-      db.run(`DELETE FROM kv WHERE scope = 'pricing' AND key = ?`, [provider]);
+      await tx.run(`DELETE FROM kv WHERE scope = 'pricing' AND key = ?`, [provider]);
       return;
     }
-    const row = db.get(`SELECT value FROM kv WHERE scope = 'pricing' AND key = ?`, [provider]);
+    const row = await tx.get(`SELECT value FROM kv WHERE scope = 'pricing' AND key = ?`, [provider]);
     const current = row ? (parseJson(row.value, {}) || {}) : {};
     delete current[model];
     if (Object.keys(current).length === 0) {
-      db.run(`DELETE FROM kv WHERE scope = 'pricing' AND key = ?`, [provider]);
+      await tx.run(`DELETE FROM kv WHERE scope = 'pricing' AND key = ?`, [provider]);
     } else {
-      db.run(
+      await tx.run(
         `INSERT INTO kv(scope, key, value) VALUES('pricing', ?, ?) ON CONFLICT(scope, key) DO UPDATE SET value = excluded.value`,
         [provider, stringifyJson(current)]
       );
     }
   });
+  await bumpSharedVersion("pricing");
   invalidate();
   return await getUserPricing();
 }
 
 export async function resetAllPricing() {
   await pricingKv.clear();
+  await bumpSharedVersion("pricing");
   invalidate();
   return {};
 }

@@ -1,6 +1,6 @@
 // CJS reader for MITM standalone process. Reads mitmAlias from JSON cache
-// at $DATA_DIR/mitm/aliases.json (synced by app from SQLite on startup + writes).
-// JSON-only: no SQLite native binding required in MITM bundle.
+// at $DATA_DIR/mitm/aliases.json (synced by app from PostgreSQL on startup + writes).
+// JSON-only: no database client is required in the MITM bundle.
 const fs = require("fs");
 const path = require("path");
 const { DATA_DIR } = require("./paths");

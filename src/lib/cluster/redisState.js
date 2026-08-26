@@ -10,6 +10,8 @@ const state = global.__nineRouterRedisState ??= {
 };
 const REDIS_CONNECT_TIMEOUT_MS = 1_500;
 const REDIS_RETRY_COOLDOWN_MS = 10_000;
+const VERSION_POLL_INTERVAL_MS = 1_000;
+const versionCache = new Map();
 
 function warnOnce(message) {
   if (state.warned) return;
@@ -52,6 +54,37 @@ export function clusterKey(name) {
   return `nine-router:${name}`;
 }
 
+// Configuration is persisted in PostgreSQL, while this tiny Redis version key
+// invalidates each worker's in-process read cache without putting configuration
+// reads on Redis. A missing Redis connection simply retains the existing TTL
+// cache behaviour.
+export async function getSharedVersion(name) {
+  const cached = versionCache.get(name);
+  if (cached && Date.now() - cached.checkedAt < VERSION_POLL_INTERVAL_MS) return cached.value;
+  try {
+    const client = await getOptionalRedis();
+    const value = client ? await client.get(clusterKey(`version:${name}`)) : null;
+    versionCache.set(name, { value, checkedAt: Date.now() });
+    return value;
+  } catch (error) {
+    warnOnce(`Redis version check failed; using local cache (${error.message})`);
+    return null;
+  }
+}
+
+export async function bumpSharedVersion(name) {
+  try {
+    const client = await getOptionalRedis();
+    if (!client) return null;
+    const value = String(await client.incr(clusterKey(`version:${name}`)));
+    versionCache.set(name, { value, checkedAt: Date.now() });
+    return value;
+  } catch (error) {
+    warnOnce(`Redis version update failed; using local cache (${error.message})`);
+    return null;
+  }
+}
+
 export async function nextDistributedCounter(name) {
   try {
     const client = await getOptionalRedis();
@@ -90,5 +123,6 @@ export async function closeRedisState() {
   state.client = null;
   state.connectPromise = null;
   state.nextAttemptAt = 0;
+  versionCache.clear();
   if (client.isOpen) await client.quit().catch(() => client.disconnect());
 }

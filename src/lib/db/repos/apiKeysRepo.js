@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from "uuid";
 import { getAdapter } from "../driver.js";
+import { bumpSharedVersion, getSharedVersion } from "../../cluster/redisState.js";
 
 function rowToKey(row) {
   if (!row) return null;
@@ -15,21 +16,28 @@ function rowToKey(row) {
 
 export async function getApiKeys() {
   const db = await getAdapter();
-  const rows = db.all(`SELECT * FROM apiKeys ORDER BY createdAt ASC`);
+  const rows = await db.all(`SELECT * FROM apiKeys ORDER BY createdAt ASC`);
   return rows.map(rowToKey);
 }
 
 export async function getApiKeyById(id) {
   const db = await getAdapter();
-  const row = db.get(`SELECT * FROM apiKeys WHERE id = ?`, [id]);
+  const row = await db.get(`SELECT * FROM apiKeys WHERE id = ?`, [id]);
   return rowToKey(row);
 }
 
 const apiKeyValidationCache = new Map();
 const API_KEY_CACHE_TTL_MS = 60000;
+let apiKeyCacheVersion = null;
 
 function invalidateApiKeyCache() {
   apiKeyValidationCache.clear();
+}
+
+async function refreshApiKeyCacheVersion() {
+  const sharedVersion = await getSharedVersion("api-keys");
+  if (sharedVersion && sharedVersion !== apiKeyCacheVersion) invalidateApiKeyCache();
+  apiKeyCacheVersion = sharedVersion;
 }
 
 export async function createApiKey(name, machineId) {
@@ -45,10 +53,11 @@ export async function createApiKey(name, machineId) {
     isActive: true,
     createdAt: new Date().toISOString(),
   };
-  db.run(
+  await db.run(
     `INSERT INTO apiKeys(id, key, name, machineId, isActive, createdAt) VALUES(?, ?, ?, ?, ?, ?)`,
     [apiKey.id, apiKey.key, apiKey.name, apiKey.machineId, 1, apiKey.createdAt]
   );
+  apiKeyCacheVersion = await bumpSharedVersion("api-keys");
   invalidateApiKeyCache();
   return apiKey;
 }
@@ -56,29 +65,32 @@ export async function createApiKey(name, machineId) {
 export async function updateApiKey(id, data) {
   const db = await getAdapter();
   let result = null;
-  db.transaction(() => {
-    const row = db.get(`SELECT * FROM apiKeys WHERE id = ?`, [id]);
+  await db.transaction(async (tx) => {
+    const row = await tx.get(`SELECT * FROM apiKeys WHERE id = ?`, [id]);
     if (!row) return;
     const merged = { ...rowToKey(row), ...data };
-    db.run(
+    await tx.run(
       `UPDATE apiKeys SET key = ?, name = ?, machineId = ?, isActive = ? WHERE id = ?`,
       [merged.key, merged.name, merged.machineId, merged.isActive ? 1 : 0, id]
     );
     result = merged;
   });
+  apiKeyCacheVersion = await bumpSharedVersion("api-keys");
   invalidateApiKeyCache();
   return result;
 }
 
 export async function deleteApiKey(id) {
   const db = await getAdapter();
-  const res = db.run(`DELETE FROM apiKeys WHERE id = ?`, [id]);
+  const res = await db.run(`DELETE FROM apiKeys WHERE id = ?`, [id]);
+  apiKeyCacheVersion = await bumpSharedVersion("api-keys");
   invalidateApiKeyCache();
   return (res?.changes ?? 0) > 0;
 }
 
 export async function validateApiKey(key) {
   if (!key) return false;
+  await refreshApiKeyCacheVersion();
   const now = Date.now();
   const cached = apiKeyValidationCache.get(key);
   // Never cache a valid key locally: another worker may revoke it in the
@@ -88,7 +100,7 @@ export async function validateApiKey(key) {
     return cached.isValid;
   }
   const db = await getAdapter();
-  const row = db.get(`SELECT isActive FROM apiKeys WHERE key = ?`, [key]);
+  const row = await db.get(`SELECT isActive FROM apiKeys WHERE key = ?`, [key]);
   const isValid = !!row && (row.isActive === 1 || row.isActive === true);
   if (isValid) apiKeyValidationCache.delete(key);
   else apiKeyValidationCache.set(key, { isValid: false, ts: now });

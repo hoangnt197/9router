@@ -82,9 +82,9 @@ export default function GetStarted() {
                 </div>
                 
                 <div className="text-gray-400 text-xs">
-                  <span className="text-purple-400">Data Location:</span><br/>
-                  <span className="text-gray-500">  macOS/Linux:</span> ~/.9router/db/data.sqlite<br/>
-                  <span className="text-gray-500">  Windows:</span> %APPDATA%/9router/db/data.sqlite
+                  <span className="text-purple-400">Persistence:</span><br/>
+                  <span className="text-gray-500">  PostgreSQL:</span> configure <code>NINE_ROUTER_DATABASE_URL</code><br/>
+                  <span className="text-gray-500">  Shared state:</span> configure <code>NINE_ROUTER_REDIS_URL</code>
                 </div>
               </div>
             </div>
@@ -94,4 +94,3 @@ export default function GetStarted() {
     </section>
   );
 }
-

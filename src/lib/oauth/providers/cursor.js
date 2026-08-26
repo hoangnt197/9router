@@ -3,7 +3,7 @@ import { CURSOR_CONFIG } from "../constants/oauth.js";
 const cursor = {
   config: CURSOR_CONFIG,
   flowType: "import_token",
-  // Cursor uses import token flow - tokens are extracted from local SQLite database
+  // Cursor uses a manual token import flow.
   // No OAuth flow needed, handled by /api/oauth/cursor/import route
   mapTokens: (tokens) => ({
     accessToken: tokens.accessToken,

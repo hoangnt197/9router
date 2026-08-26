@@ -1,0 +1,35 @@
+services:
+  9router:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: shortlab/9router:postgres-redis
+    container_name: 9router-prod
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+      HOSTNAME: "127.0.0.1"
+      PORT: "20129"
+      DATA_DIR: /app/data
+      NINE_ROUTER_DB_POOL_MAX: "8"
+      NINE_ROUTER_REDIS_URL: redis://127.0.0.1:6379/0
+    volumes:
+      - /var/lib/9router-prod:/app/data
+    init: true
+    mem_limit: 2g
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://127.0.0.1:20129/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+    logging:
+      driver: local
+      options:
+        max-size: 20m
+        max-file: "3"

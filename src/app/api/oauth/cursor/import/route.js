@@ -4,7 +4,7 @@ import { createProviderConnection } from "@/models";
 
 /**
  * POST /api/oauth/cursor/import
- * Import and validate access token from Cursor IDE's local SQLite database
+ * Import and validate a Cursor access token supplied by the user.
  *
  * Request body:
  * - accessToken: string - Access token from cursorAuth/accessToken

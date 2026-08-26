@@ -17,9 +17,13 @@ export async function ensureOutboundProxyInitialized() {
   return initialized;
 }
 
-// Defer init so HTTP server accepts connections first
-setImmediate(() => {
-  ensureOutboundProxyInitialized().catch(console.log);
-});
+// Static builds have no runtime database configuration. Initialise only in a
+// deployed process; request handlers still fail clearly if the required
+// PostgreSQL URL is absent at runtime.
+if (process.env.NINE_ROUTER_DATABASE_URL) {
+  setImmediate(() => {
+    ensureOutboundProxyInitialized().catch(console.log);
+  });
+}
 
 export default ensureOutboundProxyInitialized;

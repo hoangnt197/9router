@@ -26,7 +26,7 @@ function mapRow(row) {
   return mapped;
 }
 
-// Existing repositories use SQLite's positional `?` parameters. Translate
+// Repositories use positional `?` parameters. Translate
 // them without touching question marks inside string literals.
 export function toPostgresSql(sql) {
   let index = 0;

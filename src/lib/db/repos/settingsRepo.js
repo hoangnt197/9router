@@ -1,5 +1,6 @@
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
+import { bumpSharedVersion, getSharedVersion } from "../../cluster/redisState.js";
 
 const DEFAULT_MITM_ROUTER_BASE = "http://localhost:20128";
 const DEFAULT_HEADROOM_URL = process.env.HEADROOM_URL || "http://localhost:8787";
@@ -66,11 +67,12 @@ const DEFAULT_SETTINGS = {
 
 let cachedMergedSettings = null;
 let cachedMergedSettingsTs = 0;
+let cachedMergedSettingsVersion = null;
 const SETTINGS_CACHE_TTL_MS = 30000;
 
 async function readRaw() {
   const db = await getAdapter();
-  const row = db.get(`SELECT data FROM settings WHERE id = 1`);
+  const row = await db.get(`SELECT data FROM settings WHERE id = 1`);
   return row ? parseJson(row.data, {}) : {};
 }
 
@@ -94,13 +96,15 @@ export function mergeWithDefaults(raw) {
 }
 
 export async function getSettings() {
-  if (cachedMergedSettings && (Date.now() - cachedMergedSettingsTs) < SETTINGS_CACHE_TTL_MS) {
+  const sharedVersion = await getSharedVersion("settings");
+  if (cachedMergedSettings && (Date.now() - cachedMergedSettingsTs) < SETTINGS_CACHE_TTL_MS && (!sharedVersion || sharedVersion === cachedMergedSettingsVersion)) {
     return cachedMergedSettings;
   }
   const raw = await readRaw();
   const merged = mergeWithDefaults(raw);
   cachedMergedSettings = merged;
   cachedMergedSettingsTs = Date.now();
+  cachedMergedSettingsVersion = sharedVersion;
   return merged;
 }
 
@@ -108,24 +112,27 @@ export async function getSettings() {
 export function invalidateSettingsCache() {
   cachedMergedSettings = null;
   cachedMergedSettingsTs = 0;
+  cachedMergedSettingsVersion = null;
 }
 
 // Atomic read-merge-write inside transaction (prevents losing concurrent updates)
 export async function updateSettings(updates) {
   const db = await getAdapter();
   let next;
-  db.transaction(function () {
-    const row = db.get(`SELECT data FROM settings WHERE id = 1`);
+  await db.transaction(async (tx) => {
+    const row = await tx.get(`SELECT data FROM settings WHERE id = 1`);
     const current = row ? parseJson(row.data, {}) : {};
     next = { ...current, ...updates };
-    db.run(
+    await tx.run(
       `INSERT INTO settings(id, data) VALUES(1, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data`,
       [stringifyJson(next)],
     );
   });
   const merged = mergeWithDefaults(next);
+  const sharedVersion = await bumpSharedVersion("settings");
   cachedMergedSettings = merged;
   cachedMergedSettingsTs = Date.now();
+  cachedMergedSettingsVersion = sharedVersion;
   return merged;
 }
 

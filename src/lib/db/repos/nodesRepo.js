@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
+import { bumpSharedVersion, getSharedVersion } from "../../cluster/redisState.js";
 
 function rowToNode(row) {
   if (!row) return null;
@@ -27,9 +28,9 @@ function nodeToRow(n) {
   };
 }
 
-function upsert(db, n) {
+async function upsert(db, n) {
   const r = nodeToRow(n);
-  db.run(
+  await db.run(
     `INSERT INTO providerNodes(id, type, name, data, createdAt, updatedAt)
      VALUES(?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET
@@ -40,21 +41,25 @@ function upsert(db, n) {
 
 let cachedNodes = null;
 let cachedNodesTs = 0;
+let cachedNodesVersion = null;
 const NODES_CACHE_TTL_MS = 30000;
 
 function invalidateNodesCache() {
   cachedNodes = null;
   cachedNodesTs = 0;
+  cachedNodesVersion = null;
 }
 
 export async function getProviderNodes(filter = {}) {
   const now = Date.now();
+  const sharedVersion = await getSharedVersion("provider-nodes");
   let allNodes = cachedNodes;
-  if (!allNodes || (now - cachedNodesTs) >= NODES_CACHE_TTL_MS) {
+  if (!allNodes || (now - cachedNodesTs) >= NODES_CACHE_TTL_MS || (sharedVersion && sharedVersion !== cachedNodesVersion)) {
     const db = await getAdapter();
-    allNodes = db.all(`SELECT * FROM providerNodes`).map(rowToNode);
+    allNodes = (await db.all(`SELECT * FROM providerNodes`)).map(rowToNode);
     cachedNodes = allNodes;
     cachedNodesTs = now;
+    cachedNodesVersion = sharedVersion;
   }
 
   if (filter.type) {
@@ -81,7 +86,8 @@ export async function createProviderNode(data) {
     createdAt: now,
     updatedAt: now,
   };
-  upsert(db, node);
+  await upsert(db, node);
+  await bumpSharedVersion("provider-nodes");
   invalidateNodesCache();
   return node;
 }
@@ -89,13 +95,14 @@ export async function createProviderNode(data) {
 export async function updateProviderNode(id, data) {
   const db = await getAdapter();
   let result = null;
-  db.transaction(() => {
-    const row = db.get(`SELECT * FROM providerNodes WHERE id = ?`, [id]);
+  await db.transaction(async (tx) => {
+    const row = await tx.get(`SELECT * FROM providerNodes WHERE id = ?`, [id]);
     if (!row) return;
     const merged = { ...rowToNode(row), ...data, updatedAt: new Date().toISOString() };
-    upsert(db, merged);
+    await upsert(tx, merged);
     result = merged;
   });
+  await bumpSharedVersion("provider-nodes");
   invalidateNodesCache();
   return result;
 }
@@ -103,12 +110,13 @@ export async function updateProviderNode(id, data) {
 export async function deleteProviderNode(id) {
   const db = await getAdapter();
   let removed = null;
-  db.transaction(() => {
-    const row = db.get(`SELECT * FROM providerNodes WHERE id = ?`, [id]);
+  await db.transaction(async (tx) => {
+    const row = await tx.get(`SELECT * FROM providerNodes WHERE id = ?`, [id]);
     if (!row) return;
     removed = rowToNode(row);
-    db.run(`DELETE FROM providerNodes WHERE id = ?`, [id]);
+    await tx.run(`DELETE FROM providerNodes WHERE id = ?`, [id]);
   });
+  await bumpSharedVersion("provider-nodes");
   invalidateNodesCache();
   return removed;
 }

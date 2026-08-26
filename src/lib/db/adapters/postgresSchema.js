@@ -1,4 +1,4 @@
-// PostgreSQL schema mirrors the SQLite logical schema. Identifiers are kept
+// PostgreSQL schema for 9router's logical data model. Identifiers are kept
 // lowercase in PostgreSQL because the existing SQL is intentionally unquoted.
 // postgresAdapter maps result keys back to the camelCase API used by repos.
 export const POSTGRES_SCHEMA_SQL = [
@@ -36,10 +36,6 @@ export const POSTGRES_SCHEMA_SQL = [
     status TEXT, tokens TEXT, meta TEXT
   )`,
   `CREATE TABLE IF NOT EXISTS usagedaily (datekey TEXT PRIMARY KEY, data TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS requestdetails (
-    id TEXT PRIMARY KEY, timestamp TEXT NOT NULL, provider TEXT, model TEXT,
-    connectionid TEXT, status TEXT, data TEXT NOT NULL
-  )`,
   `CREATE INDEX IF NOT EXISTS idx_pc_provider ON providerconnections(provider)`,
   `CREATE INDEX IF NOT EXISTS idx_pc_provider_active ON providerconnections(provider, isactive)`,
   `CREATE INDEX IF NOT EXISTS idx_pc_priority ON providerconnections(provider, priority)`,
@@ -53,10 +49,6 @@ export const POSTGRES_SCHEMA_SQL = [
   `CREATE INDEX IF NOT EXISTS idx_uh_provider ON usagehistory(provider)`,
   `CREATE INDEX IF NOT EXISTS idx_uh_model ON usagehistory(model)`,
   `CREATE INDEX IF NOT EXISTS idx_uh_conn ON usagehistory(connectionid)`,
-  `CREATE INDEX IF NOT EXISTS idx_rd_ts ON requestdetails(timestamp DESC)`,
-  `CREATE INDEX IF NOT EXISTS idx_rd_provider ON requestdetails(provider)`,
-  `CREATE INDEX IF NOT EXISTS idx_rd_model ON requestdetails(model)`,
-  `CREATE INDEX IF NOT EXISTS idx_rd_conn ON requestdetails(connectionid)`,
 ];
 
 export async function ensurePostgresSchema(pool) {

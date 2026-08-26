@@ -2,14 +2,14 @@ import { CURSOR_CONFIG } from "../constants/oauth.js";
 
 /**
  * Cursor IDE OAuth Service
- * Supports Import Token method from Cursor IDE's local SQLite database
+ * Supports manual token import from Cursor IDE.
  *
  * Token Location:
  * - Linux: ~/.config/Cursor/User/globalStorage/state.vscdb
  * - macOS: /Users/<user>/Library/Application Support/Cursor/User/globalStorage/state.vscdb
  * - Windows: %APPDATA%\Cursor\User\globalStorage\state.vscdb
  *
- * Database Keys:
+ * Token fields:
  * - cursorAuth/accessToken: The access token
  * - storage.serviceMachineId: Machine ID for checksum
  */
@@ -89,8 +89,8 @@ export class CursorService {
    * Validate and import token from Cursor IDE
    * Note: We skip API validation because Cursor API uses complex protobuf format.
    * Token will be validated when actually used for requests.
-   * @param {string} accessToken - Access token from state.vscdb
-   * @param {string} machineId - Machine ID from state.vscdb
+   * @param {string} accessToken - Access token supplied by the user
+   * @param {string} machineId - Machine ID supplied by the user
    */
   async validateImportToken(accessToken, machineId) {
     // Basic validation
@@ -164,15 +164,8 @@ export class CursorService {
         `   - Linux: ${this.config.tokenStoragePaths.linux}`,
         `   - macOS: ${this.config.tokenStoragePaths.macos}`,
         `   - Windows: ${this.config.tokenStoragePaths.windows}`,
-        "3. Open the database with SQLite browser or CLI:",
-        "   sqlite3 state.vscdb \"SELECT value FROM itemTable WHERE key='cursorAuth/accessToken'\"",
-        "4. Also get the machine ID:",
-        "   sqlite3 state.vscdb \"SELECT value FROM itemTable WHERE key='storage.serviceMachineId'\"",
-        "5. Paste both values in the form below",
-      ],
-      alternativeMethod: [
-        "Or use this one-liner to get both values:",
-        "sqlite3 state.vscdb \"SELECT key, value FROM itemTable WHERE key IN ('cursorAuth/accessToken', 'storage.serviceMachineId')\"",
+        "3. Obtain your access token and machine ID from Cursor using a method you trust",
+        "4. Paste both values in the form below",
       ],
     };
   }

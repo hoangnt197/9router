@@ -13,7 +13,6 @@
     "dev:bun": "bun --bun next dev --webpack --port 20127",
     "build:bun": "bun --bun next build --webpack",
     "start:bun": "bun ./.next/standalone/custom-server.js",
-    "db:import-postgres": "node scripts/import-sqlite-to-postgres.mjs",
     "cli:pack": "npm --prefix cli run pack:cli",
     "cli:publish": "npm --prefix cli run publish:cli"
   },
@@ -50,15 +49,10 @@
     "redis": "^5.10.0",
     "selfsigned": "^5.5.0",
     "socks-proxy-agent": "^8.0.5",
-    "sql.js": "^1.14.1",
     "undici": "^7.19.2",
     "uuid": "^13.0.0",
     "zustand": "^5.0.10"
   },
-  "optionalDependencies": {
-    "better-sqlite3": "^12.6.2"
-  },
-  "comment_better_sqlite3": "kept in optionalDependencies so npm install doesn't fail on systems without build tools — sql.js is used as fallback at runtime",
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.18",
     "eslint": "^9",

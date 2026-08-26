@@ -1263,7 +1263,7 @@ git clone https://github.com/decolua/9router.git
 cd 9router/app
 docker build -t 9router .
 docker run -d --name 9router -p 20128:20128 \
-  -v "$HOME/.9router:/app/data" -e DATA_DIR=/app/data 9router
+  --env-file .env 9router
 ```
 
 **Container defaults:**
@@ -1280,7 +1280,7 @@ docker stop 9router && docker rm 9router
 docker pull decolua/9router:latest   # update to latest
 ```
 
-**Data persistence:** `$HOME/.9router/db/data.sqlite` on host ↔ `/app/data/db/data.sqlite` in container.
+**Data persistence:** PostgreSQL is required through `NINE_ROUTER_DATABASE_URL`. For multi-instance deployments, set `NINE_ROUTER_REDIS_URL` as well.
 
 ### Environment Variables
 
@@ -1288,7 +1288,9 @@ docker pull decolua/9router:latest   # update to latest
 | ---------------------------------------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------- |
 | `JWT_SECRET`                                         | Auto-generated (`~/.9router/jwt-secret`) | JWT signing secret for dashboard auth cookie (override to share across instances)   |
 | `INITIAL_PASSWORD`                                   | `123456`                                 | First login password when no saved hash exists                                      |
-| `DATA_DIR`                                           | `~/.9router`                             | Main app data location (SQLite at `$DATA_DIR/db/data.sqlite`)                       |
+| `NINE_ROUTER_DATABASE_URL`                           | —                                        | Required PostgreSQL connection string for all persistent 9router data               |
+| `NINE_ROUTER_REDIS_URL`                              | empty                                    | Optional Redis URL for shared cache invalidation and distributed coordination        |
+| `DATA_DIR`                                           | `/app/data`                              | Runtime files such as MITM alias cache; not a database location                      |
 | `PORT`                                               | framework default                        | Service port (`20128` in examples)                                                  |
 | `HOSTNAME`                                           | framework default                        | Bind host (Docker defaults to `0.0.0.0`)                                            |
 | `NODE_ENV`                                           | runtime default                          | Set `production` for deploy                                                         |
@@ -1308,13 +1310,12 @@ Notes:
 
 - Lowercase proxy variables are also supported: `http_proxy`, `https_proxy`, `all_proxy`, `no_proxy`.
 - `.env` is not baked into Docker image (`.dockerignore`); inject runtime config with `--env-file` or `-e`.
-- On Windows, `APPDATA` can be used for local storage path resolution.
 - `INSTANCE_NAME` appears in older docs/env templates, but is currently not used at runtime.
 
 ### Runtime Files and Storage
 
-- Main app state: `${DATA_DIR}/db/data.sqlite` (SQLite — providers, combos, aliases, keys, settings, usage history)
-- Auto backups: `${DATA_DIR}/db/backups/`
+- Main app state: PostgreSQL (`NINE_ROUTER_DATABASE_URL`) — providers, combos, aliases, keys, settings, and usage history.
+- Redis (`NINE_ROUTER_REDIS_URL`) coordinates cache invalidation between instances; it is not the source of truth.
 - Optional request/translator logs: `<repo>/logs/...` when `ENABLE_REQUEST_LOGS=true`
 - Both `${DATA_DIR}` and `~/.9router` resolve to the same location in a Docker container — the symlink `/root/.9router -> /app/data` is created at build time.
 
@@ -1443,7 +1444,7 @@ Notes:
 - **Runtime**: Node.js 20+
 - **Framework**: Next.js 16
 - **UI**: React 19 + Tailwind CSS 4
-- **Database**: SQLite (better-sqlite3 / node:sqlite / sql.js fallback)
+- **Database**: PostgreSQL (required) + Redis (optional shared coordination)
 - **Streaming**: Server-Sent Events (SSE)
 - **Auth**: OAuth 2.0 (PKCE) + JWT + API Keys
 

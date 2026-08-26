@@ -1,4 +1,4 @@
-// Shim → re-export from new SQLite-based DB layer (src/lib/db/)
+// Compatibility shim → PostgreSQL persistence layer (src/lib/db/).
 // Kept for backward compatibility with existing imports.
 export {
   getSettings, updateSettings, isCloudEnabled, getCloudUrl,
@@ -17,5 +17,4 @@ export {
   getCustomModels, addCustomModel, deleteCustomModel,
   getMitmAlias, setMitmAliasAll,
   getPricing, getPricingForModel, updatePricing, resetPricing, resetAllPricing,
-  exportDb, importDb,
 } from "@/lib/db/index.js";
