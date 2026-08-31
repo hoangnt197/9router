@@ -548,6 +548,10 @@ export default function UsageStats({ period: periodProp, setPeriod: setPeriodPro
         </div>
         {loading ? spinner : activeTableConfig && (
           <UsageTable
+            // Table shapes have a different number of summary cells. Remount
+            // when changing report dimensions so React never reuses a Model
+            // row (e.g. `gpt-5.6-luna`) for a Combo row with the same key.
+            key={tableView}
             title=""
             columns={activeTableConfig.columns}
             groupedData={activeTableConfig.groupedData}

@@ -43,6 +43,21 @@ function formatCodexWindow(window) {
   };
 }
 
+function getCodexWindowType(window, fallbackType) {
+  const duration = toFiniteNumber(
+    window?.limit_window_seconds ?? window?.limitWindowSeconds ?? window?.window_seconds,
+    0,
+  );
+
+  // Codex has returned the weekly allowance as `primary_window` for some
+  // accounts and the 5-hour allowance as `primary_window` for others. The
+  // duration is the stable discriminator; reset_after_seconds is not, since
+  // it shrinks as a window approaches its reset.
+  if (duration >= 24 * 60 * 60) return "weekly";
+  if (duration > 0) return "session";
+  return fallbackType;
+}
+
 function appendCodexQuotaWindows(quotas, prefix, snapshot) {
   const rateLimit = getCodexRateLimitBody(snapshot);
   if (!rateLimit) return false;
@@ -51,12 +66,11 @@ function appendCodexQuotaWindows(quotas, prefix, snapshot) {
   const secondary = rateLimit.secondary_window || rateLimit.secondary || snapshot.secondary_window || snapshot.secondary;
   let added = false;
 
-  if (primary) {
-    quotas[prefix ? `${prefix}_session` : "session"] = formatCodexWindow(primary);
-    added = true;
-  }
-  if (secondary) {
-    quotas[prefix ? `${prefix}_weekly` : "weekly"] = formatCodexWindow(secondary);
+  for (const [window, fallbackType] of [[primary, "session"], [secondary, "weekly"]]) {
+    if (!window) continue;
+    const windowType = getCodexWindowType(window, fallbackType);
+    const quotaKey = prefix ? `${prefix}_${windowType}` : windowType;
+    quotas[quotaKey] = formatCodexWindow(window);
     added = true;
   }
 
