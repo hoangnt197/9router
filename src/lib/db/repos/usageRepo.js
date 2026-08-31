@@ -78,6 +78,7 @@ function aggregateEntryToDay(day, entry) {
   day.byAccount ||= {};
   day.byApiKey ||= {};
   day.byEndpoint ||= {};
+  day.byCombo ||= {};
 
   if (entry.provider) addToCounter(day.byProvider, entry.provider, vals);
 
@@ -95,6 +96,15 @@ function aggregateEntryToDay(day, entry) {
   const endpoint = entry.endpoint || "Unknown";
   const epKey = `${endpoint}|${entry.model}|${entry.provider || "unknown"}`;
   addToCounter(day.byEndpoint, epKey, { ...vals, meta: { endpoint, rawModel: entry.model, provider: entry.provider } });
+
+  // Combination attribution begins with this release only. A tracked direct
+  // request is still useful for reconciliation, while historical rows are
+  // intentionally omitted rather than being guessed as a combo.
+  if (entry.comboTracked) {
+    const comboName = entry.comboName || "Direct / No combo";
+    const comboKey = `${comboName}|${entry.model}|${entry.provider || "unknown"}`;
+    addToCounter(day.byCombo, comboKey, { ...vals, meta: { comboName, rawModel: entry.model, provider: entry.provider } });
+  }
 }
 
 function pushToRing(entry) {
@@ -284,7 +294,7 @@ export async function saveRequestUsage(entry) {
           entry.timestamp, entry.provider || null, entry.model || null,
           entry.connectionId || null, entry.apiKey || null, entry.endpoint || null,
           promptTokens, completionTokens, entry.cost || 0, entry.status || "ok",
-          stringifyJson(tokens), stringifyJson(entry.meta || {}),
+          stringifyJson(tokens), stringifyJson({ ...(entry.meta || {}), comboName: entry.comboName || null, comboTracked: entry.comboTracked === true }),
         ]
       );
 
@@ -292,7 +302,7 @@ export async function saveRequestUsage(entry) {
       const row = await tx.get(`SELECT data FROM usageDaily WHERE dateKey = ?`, [dateKey]);
       const day = row ? parseJson(row.data, {}) : {
         requests: 0, promptTokens: 0, completionTokens: 0, cost: 0,
-        byProvider: {}, byModel: {}, byAccount: {}, byApiKey: {}, byEndpoint: {},
+        byProvider: {}, byModel: {}, byAccount: {}, byApiKey: {}, byEndpoint: {}, byCombo: {},
       };
       aggregateEntryToDay(day, entry);
       await tx.run(`INSERT INTO usageDaily(dateKey, data) VALUES(?, ?) ON CONFLICT(dateKey) DO UPDATE SET data = excluded.data`, [dateKey, stringifyJson(day)]);
@@ -395,7 +405,7 @@ export async function getUsageStats(period = "all") {
   const stats = {
     totalRequests: 0,
     totalPromptTokens: 0, totalCompletionTokens: 0, totalCachedTokens: 0, totalCost: 0,
-    byProvider: {}, byModel: {}, byAccount: {}, byApiKey: {}, byEndpoint: {},
+    byProvider: {}, byModel: {}, byAccount: {}, byApiKey: {}, byEndpoint: {}, byCombo: {},
     last10Minutes: [],
     pending: pendingRequests,
     activeRequests: [],
@@ -535,12 +545,29 @@ export async function getUsageStats(period = "all") {
         stats.byEndpoint[epKey].cost += ep.cost || 0;
         if (dateKey > (stats.byEndpoint[epKey].lastUsed || "")) stats.byEndpoint[epKey].lastUsed = dateKey;
       }
+
+      for (const [comboKey, combo] of Object.entries(day.byCombo || {})) {
+        const comboName = combo.comboName || comboKey.split("|")[0] || "Direct / No combo";
+        const rawModel = combo.rawModel || comboKey.split("|")[1] || "";
+        const provider = combo.provider || comboKey.split("|")[2] || "";
+        const providerDisplayName = providerNodeNameMap[provider] || provider;
+        if (!stats.byCombo[comboKey]) {
+          stats.byCombo[comboKey] = { requests: 0, promptTokens: 0, completionTokens: 0, cachedTokens: 0, cost: 0, comboName, rawModel, provider: providerDisplayName, lastUsed: dateKey };
+        }
+        const target = stats.byCombo[comboKey];
+        target.requests += combo.requests || 0;
+        target.promptTokens += combo.promptTokens || 0;
+        target.completionTokens += combo.completionTokens || 0;
+        target.cachedTokens += combo.cachedTokens || 0;
+        target.cost += combo.cost || 0;
+        if (dateKey > (target.lastUsed || "")) target.lastUsed = dateKey;
+      }
     }
 
     // Overlay precise lastUsed timestamps from history
     const overlayCutoff = maxDays ? Date.now() - maxDays * 86400000 : 0;
     const histRows = await db.all(
-      `SELECT timestamp, provider, model, connectionId, apiKey, endpoint FROM usageHistory WHERE timestamp >= ?`,
+      `SELECT timestamp, provider, model, connectionId, apiKey, endpoint, meta FROM usageHistory WHERE timestamp >= ?`,
       [new Date(overlayCutoff).toISOString()]
     );
     for (const e of histRows) {
@@ -562,6 +589,13 @@ export async function getUsageStats(period = "all") {
       const endpoint = e.endpoint || "Unknown";
       const endpointKey = `${endpoint}|${e.model}|${e.provider || "unknown"}`;
       if (stats.byEndpoint[endpointKey] && new Date(ts) > new Date(stats.byEndpoint[endpointKey].lastUsed)) stats.byEndpoint[endpointKey].lastUsed = ts;
+
+      const meta = parseJson(e.meta, {}) || {};
+      if (meta.comboTracked === true) {
+        const comboName = meta.comboName || "Direct / No combo";
+        const comboKey = `${comboName}|${e.model}|${e.provider || "unknown"}`;
+        if (stats.byCombo[comboKey] && new Date(ts) > new Date(stats.byCombo[comboKey].lastUsed)) stats.byCombo[comboKey].lastUsed = ts;
+      }
     }
   } else {
     // 24h / today: live history
@@ -574,7 +608,7 @@ export async function getUsageStats(period = "all") {
       cutoff = new Date(Date.now() - PERIOD_MS["24h"]).toISOString();
     }
     const filtered = await db.all(
-      `SELECT timestamp, provider, model, connectionId, apiKey, endpoint, promptTokens, completionTokens, cost, tokens FROM usageHistory WHERE timestamp >= ?`,
+      `SELECT timestamp, provider, model, connectionId, apiKey, endpoint, promptTokens, completionTokens, cost, tokens, meta FROM usageHistory WHERE timestamp >= ?`,
       [cutoff]
     );
 
@@ -651,6 +685,18 @@ export async function getUsageStats(period = "all") {
       const epe = stats.byEndpoint[epKey];
       epe.requests++; epe.promptTokens += promptTokens; epe.completionTokens += completionTokens; epe.cachedTokens += cachedTokens; epe.cost += entryCost;
       if (new Date(r.timestamp) > new Date(epe.lastUsed)) epe.lastUsed = r.timestamp;
+
+      const meta = parseJson(r.meta, {}) || {};
+      if (meta.comboTracked === true) {
+        const comboName = meta.comboName || "Direct / No combo";
+        const comboKey = `${comboName}|${r.model}|${r.provider || "unknown"}`;
+        if (!stats.byCombo[comboKey]) {
+          stats.byCombo[comboKey] = { requests: 0, promptTokens: 0, completionTokens: 0, cachedTokens: 0, cost: 0, comboName, rawModel: r.model, provider: providerDisplayName, lastUsed: r.timestamp };
+        }
+        const combo = stats.byCombo[comboKey];
+        combo.requests++; combo.promptTokens += promptTokens; combo.completionTokens += completionTokens; combo.cachedTokens += cachedTokens; combo.cost += entryCost;
+        if (new Date(r.timestamp) > new Date(combo.lastUsed)) combo.lastUsed = r.timestamp;
+      }
     }
   }
 

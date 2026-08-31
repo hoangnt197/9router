@@ -11,8 +11,7 @@ Run 9Router in a container. Published image: [`decolua/9router`](https://hub.doc
 ```bash
 docker run -d \
   -p 20128:20128 \
-  -v "$HOME/.9router:/app/data" \
-  -e DATA_DIR=/app/data \
+  --env-file .env \
   --name 9router \
   decolua/9router:latest
 ```
@@ -30,33 +29,17 @@ docker rm -f 9router          # remove
 
 ## Data persistence
 
-```bash
--v "$HOME/.9router:/app/data" \
--e DATA_DIR=/app/data
-```
-
-Without `DATA_DIR`, the app falls back to `~/.9router/` (macOS/Linux) or `%APPDATA%\9router\` (Windows). In the container, `DATA_DIR=/app/data` makes the bind mount work.
-
-Data layout under `$DATA_DIR/`:
-
-```text
-$DATA_DIR/
-├── db/
-│   ├── data.sqlite       # main SQLite database
-│   └── backups/          # auto backups
-└── ...                   # certs, logs, runtime configs
-```
-
-Host path: `$HOME/.9router/db/data.sqlite`
-Container path: `/app/data/db/data.sqlite`
+Set `NINE_ROUTER_DATABASE_URL` to a PostgreSQL connection string. PostgreSQL
+is the source of truth for connections, keys, combos, settings, and usage.
+For multiple 9router instances, set `NINE_ROUTER_REDIS_URL` to a shared Redis
+instance; it coordinates cache invalidation and distributed state.
 
 ## Optional env vars
 
 ```bash
 docker run -d \
   -p 20128:20128 \
-  -v "$HOME/.9router:/app/data" \
-  -e DATA_DIR=/app/data \
+  --env-file .env \
   -e PORT=20128 \
   -e HOSTNAME=0.0.0.0 \
   -e DEBUG=true \

@@ -221,11 +221,10 @@ function buildCliPackage() {
     process.exit(1);
   }
 
-  // Step 3b: Ensure sql.js (pure JS fallback) bundled in app/cli/app/node_modules.
-  // Strip better-sqlite3 (native) — it lives in ~/.9router/runtime to avoid
-  // Windows EBUSY during global CLI updates. node:sqlite (Node ≥22.5) is also
-  // available as a no-install middle tier.
-  console.log("3️⃣ b Configuring SQLite drivers...");
+  // Step 3b: Ensure dynamically loaded PostgreSQL/Redis dependencies are in
+  // the standalone CLI bundle. Next tracing cannot always see repository and
+  // cluster modules loaded dynamically at runtime.
+  console.log("3️⃣ b Configuring PostgreSQL and Redis runtime dependencies...");
   function ensureModuleInBundle(pkg) {
     const dest = path.join(cliAppDir, "node_modules", pkg);
     if (fs.existsSync(dest)) {
@@ -238,23 +237,19 @@ function buildCliPackage() {
     ];
     const src = candidates.find((p) => fs.existsSync(p));
     if (!src) {
-      console.warn(`⚠️  ${pkg} not found locally — bundle will rely on node:sqlite or runtime install`);
+      console.warn(`⚠️  ${pkg} not found locally — the packaged CLI may not start`);
       return;
     }
     fs.mkdirSync(path.dirname(dest), { recursive: true });
     copyRecursive(src, dest);
     console.log(`✅ Bundled ${pkg}`);
   }
-  ensureModuleInBundle("sql.js");
-  // `open` is external (see serverExternalPackages in next.config.mjs), so it must exist in
-  // the bundle's node_modules or every importer throws MODULE_NOT_FOUND at runtime. Output
-  // tracing normally copies it; this is the same belt-and-braces guard used for sql.js.
-  ensureModuleInBundle("open");
-  const betterDir = path.join(cliAppDir, "node_modules", "better-sqlite3");
-  if (fs.existsSync(betterDir)) {
-    fs.rmSync(betterDir, { recursive: true, force: true });
-    console.log("✅ Stripped better-sqlite3 (lives in ~/.9router/runtime)");
-  }
+  [
+    "open", "uuid", "redis", "@redis", "cluster-key-slot", "pg",
+    "pg-cloudflare", "pg-connection-string", "pg-int8", "pg-pool",
+    "pg-protocol", "pg-types", "pgpass", "postgres-array",
+    "postgres-bytea", "postgres-date", "postgres-interval", "split2",
+  ].forEach(ensureModuleInBundle);
   console.log("");
 
   // Step 4: Copy static files

@@ -10,7 +10,7 @@ import { buildRequestDetail, extractRequestConfig, extractUsageFromResponse, sav
 import { appendRequestLog, saveRequestDetail } from "@/lib/usageDb.js";
 import { decloakToolNames } from "../../utils/claudeCloaking.js";
 import { ROLE, RESPONSES_ITEM } from "../../translator/schema/index.js";
-import { applyResponsePolicy, createReasoningUsagePolicy, publicModelName } from "../../utils/reasoningUsagePolicy.js";
+import { applyClientTokenUsagePolicy, applyResponsePolicy, createClientTokenUsagePolicy, createReasoningUsagePolicy, publicModelName } from "../../utils/reasoningUsagePolicy.js";
 
 function parseToolArguments(value) {
   if (!value) return {};
@@ -323,8 +323,14 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
   applyResponsePolicy(translatedResponse, createReasoningUsagePolicy(body, model));
   const usage = extractUsageFromResponse(translatedResponse) || extractUsageFromResponse(responseBody);
   appendLog({ tokens: usage, status: "200 OK" });
-  saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, requestBody: finalBody || translatedBody || body, silent: true });
+  // Usage attribution must inspect the original marked request body. The
+  // translated/final provider payload replaces `model` with the resolved
+  // member and drops the non-enumerable combo marker.
+  saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, requestBody: body || finalBody || translatedBody, silent: true });
   if (log?.line) log.line(reqTag, "📊", formatDoneLine({ usage, latency: { total: Date.now() - requestStartTime } }));
+  // Persist real provider usage above; multiply only the response serialized to
+  // the client for a configured combo item.
+  applyClientTokenUsagePolicy(translatedResponse, createClientTokenUsagePolicy(body));
   const isClaudeMessageResponse = sourceFormat === FORMATS.CLAUDE && translatedResponse?.type === "message";
   // Responses-format translation produces a `object:"response"` body with no
   // `choices`; skip the Chat-Completions-specific post-processing below for it.

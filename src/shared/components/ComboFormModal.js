@@ -41,13 +41,19 @@ function ModelItem({
 }) {
   const [editingName, setEditingName] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  const [activeTab, setActiveTab] = useState("pricing"); // "pricing" | "schedule"
+  const [activeTab, setActiveTab] = useState("pricing"); // "pricing" | "tokens" | "schedule"
 
   const modelName = typeof item === "object" ? item.model : item;
   const pricingType = (typeof item === "object" && (item.pricingType === "token" || item.pricingType === "input_token")) ? "token" : "request";
   const price = (typeof item === "object" && item.price !== null && item.price !== undefined) ? item.price : "";
   const minPrice = (typeof item === "object" && item.minPrice !== null && item.minPrice !== undefined) ? item.minPrice : "";
   const maxInputTokens = (typeof item === "object" && item.maxInputTokens !== null && item.maxInputTokens !== undefined) ? item.maxInputTokens : "";
+  const inputTokenMultiplier = (typeof item === "object" && item.inputTokenMultiplier !== null && item.inputTokenMultiplier !== undefined) ? item.inputTokenMultiplier : "";
+  const inputTokenMultiplierPercent = (typeof item === "object" && item.inputTokenMultiplierPercent !== null && item.inputTokenMultiplierPercent !== undefined) ? item.inputTokenMultiplierPercent : "";
+  const inputTokenMultiplierMax = (typeof item === "object" && item.inputTokenMultiplierMax !== null && item.inputTokenMultiplierMax !== undefined) ? item.inputTokenMultiplierMax : "";
+  const outputTokenMultiplier = (typeof item === "object" && item.outputTokenMultiplier !== null && item.outputTokenMultiplier !== undefined) ? item.outputTokenMultiplier : "";
+  const outputTokenMultiplierPercent = (typeof item === "object" && item.outputTokenMultiplierPercent !== null && item.outputTokenMultiplierPercent !== undefined) ? item.outputTokenMultiplierPercent : "";
+  const outputTokenMultiplierMax = (typeof item === "object" && item.outputTokenMultiplierMax !== null && item.outputTokenMultiplierMax !== undefined) ? item.outputTokenMultiplierMax : "";
 
   const timeSchedule = (typeof item === "object" && item.timeSchedule) || {
     enabled: false,
@@ -77,6 +83,8 @@ function ModelItem({
 
   const hasPrice = price !== "" && price !== null && price !== undefined && Number(price) >= 0;
   const hasMaxInputTokens = maxInputTokens !== "" && Number(maxInputTokens) > 0;
+  const hasTokenRules = (Number(inputTokenMultiplier) > 1 && Number(inputTokenMultiplierPercent) > 0)
+    || (Number(outputTokenMultiplier) > 1 && Number(outputTokenMultiplierPercent) > 0);
   const priceLabel = hasPrice
     ? pricingType === "token"
       ? `$${price}/1M tok${minPrice !== "" && Number(minPrice) > 0 ? ` (min $${minPrice})` : ""}`
@@ -132,7 +140,7 @@ function ModelItem({
             className={`flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium transition-colors ${
               expanded
                 ? "bg-primary text-white shadow-xs"
-                : (hasPrice || hasMaxInputTokens || isScheduleEnabled)
+                : (hasPrice || hasMaxInputTokens || hasTokenRules || isScheduleEnabled)
                   ? "bg-primary/10 text-primary hover:bg-primary/20"
                   : "bg-black/5 text-text-muted hover:text-text-main hover:bg-black/10 dark:bg-white/5 dark:hover:bg-white/10"
             }`}
@@ -204,6 +212,18 @@ function ModelItem({
           </button>
         )}
 
+        {hasTokenRules && (
+          <button
+            type="button"
+            onClick={() => { setExpanded(true); setActiveTab("tokens"); }}
+            className="inline-flex items-center gap-1 rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-mono font-medium text-amber-600 hover:bg-amber-500/20 dark:text-amber-400"
+            title="Client response token multiplier"
+          >
+            <span className="material-symbols-outlined text-[11px]">functions</span>
+            <span>Tokens</span>
+          </button>
+        )}
+
         {isScheduleEnabled && (
           <button
             type="button"
@@ -234,6 +254,18 @@ function ModelItem({
               >
                 <span className="material-symbols-outlined text-[14px]">payments</span>
                 Pricing
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("tokens")}
+                className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-colors ${
+                  activeTab === "tokens"
+                    ? "bg-primary/10 text-primary"
+                    : "text-text-muted hover:text-text-main"
+                }`}
+              >
+                <span className="material-symbols-outlined text-[14px]">functions</span>
+                Tokens
               </button>
               <button
                 type="button"
@@ -353,6 +385,38 @@ function ModelItem({
                   : "Fixed cost per request. Leave empty if unpriced (ranked last in Lowest Cost)."}
                 {" Max Input Tokens is optional; models below this capacity are deferred until compatible models fail."}
               </p>
+            </div>
+          )}
+
+          {activeTab === "tokens" && (
+            <div className="space-y-3">
+              <p className="text-[10px] text-text-muted">Only changes token usage returned to the client. Reports and cost keep upstream usage.</p>
+              {[
+                ["Input", "inputTokenMultiplier", inputTokenMultiplier, "inputTokenMultiplierPercent", inputTokenMultiplierPercent, "inputTokenMultiplierMax", inputTokenMultiplierMax],
+                ["Output", "outputTokenMultiplier", outputTokenMultiplier, "outputTokenMultiplierPercent", outputTokenMultiplierPercent, "outputTokenMultiplierMax", outputTokenMultiplierMax],
+              ].map(([label, multiplierKey, multiplier, percentKey, percent, maxKey, max]) => (
+                <div key={label} className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="text-[10px] font-medium text-text-muted block mb-0.5">{label} ×</label>
+                    <input type="number" step="1" min="2" placeholder="Off" value={multiplier}
+                      onChange={(e) => onEditConfig({ [multiplierKey]: e.target.value })}
+                      className="w-full rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 px-2 py-1 font-mono text-xs outline-none focus:border-primary" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-medium text-text-muted block mb-0.5">Chance %</label>
+                    <input type="number" step="1" min="0" max="100" placeholder="100" value={percent}
+                      onChange={(e) => onEditConfig({ [percentKey]: e.target.value })}
+                      className="w-full rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 px-2 py-1 font-mono text-xs outline-none focus:border-primary" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-medium text-text-muted block mb-0.5">Cap</label>
+                    <input type="number" step="1" min="1" placeholder="No cap" value={max}
+                      onChange={(e) => onEditConfig({ [maxKey]: e.target.value })}
+                      className="w-full rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 px-2 py-1 font-mono text-xs outline-none focus:border-primary" />
+                  </div>
+                </div>
+              ))}
+              <p className="text-[9px] text-text-muted italic">Cap limits multiplication only. Example: 4 tokens, ×5, cap 10 → ×2 = 8.</p>
             </div>
           )}
 
@@ -488,6 +552,12 @@ export default function ComboFormModal({ isOpen, combo, onClose, onSave, activeP
         price: "",
         minPrice: "",
         maxInputTokens: "",
+        inputTokenMultiplier: "",
+        inputTokenMultiplierPercent: "",
+        inputTokenMultiplierMax: "",
+        outputTokenMultiplier: "",
+        outputTokenMultiplierPercent: "",
+        outputTokenMultiplierMax: "",
         timeSchedule: {
           enabled: false,
           startTime: "00:00",
@@ -501,6 +571,12 @@ export default function ComboFormModal({ isOpen, combo, onClose, onSave, activeP
       price: m.price !== undefined && m.price !== null ? m.price : "",
       minPrice: m.minPrice !== undefined && m.minPrice !== null ? m.minPrice : "",
       maxInputTokens: m.maxInputTokens !== undefined && m.maxInputTokens !== null ? m.maxInputTokens : "",
+      inputTokenMultiplier: m.inputTokenMultiplier !== undefined && m.inputTokenMultiplier !== null ? m.inputTokenMultiplier : "",
+      inputTokenMultiplierPercent: m.inputTokenMultiplierPercent !== undefined && m.inputTokenMultiplierPercent !== null ? m.inputTokenMultiplierPercent : "",
+      inputTokenMultiplierMax: m.inputTokenMultiplierMax !== undefined && m.inputTokenMultiplierMax !== null ? m.inputTokenMultiplierMax : "",
+      outputTokenMultiplier: m.outputTokenMultiplier !== undefined && m.outputTokenMultiplier !== null ? m.outputTokenMultiplier : "",
+      outputTokenMultiplierPercent: m.outputTokenMultiplierPercent !== undefined && m.outputTokenMultiplierPercent !== null ? m.outputTokenMultiplierPercent : "",
+      outputTokenMultiplierMax: m.outputTokenMultiplierMax !== undefined && m.outputTokenMultiplierMax !== null ? m.outputTokenMultiplierMax : "",
       timeSchedule: m.timeSchedule && typeof m.timeSchedule === "object" ? {
         enabled: !!m.timeSchedule.enabled,
         startTime: m.timeSchedule.startTime || "00:00",
@@ -551,6 +627,12 @@ export default function ComboFormModal({ isOpen, combo, onClose, onSave, activeP
         price: sysPrice !== null ? sysPrice : "",
         minPrice: "",
         maxInputTokens: "",
+        inputTokenMultiplier: "",
+        inputTokenMultiplierPercent: "",
+        inputTokenMultiplierMax: "",
+        outputTokenMultiplier: "",
+        outputTokenMultiplierPercent: "",
+        outputTokenMultiplierMax: "",
         timeSchedule: {
           enabled: false,
           startTime: "00:00",
@@ -600,6 +682,12 @@ export default function ComboFormModal({ isOpen, combo, onClose, onSave, activeP
       price: m.price !== "" && m.price !== null && m.price !== undefined ? parseFloat(m.price) : null,
       minPrice: m.minPrice !== "" && m.minPrice !== null && m.minPrice !== undefined ? parseFloat(m.minPrice) : null,
       maxInputTokens: m.maxInputTokens !== "" && m.maxInputTokens !== null && m.maxInputTokens !== undefined ? Math.floor(Number(m.maxInputTokens)) : null,
+      inputTokenMultiplier: Number(m.inputTokenMultiplier) > 1 ? Math.floor(Number(m.inputTokenMultiplier)) : null,
+      inputTokenMultiplierPercent: Number(m.inputTokenMultiplierPercent) > 0 ? Math.min(100, Number(m.inputTokenMultiplierPercent)) : null,
+      inputTokenMultiplierMax: Number(m.inputTokenMultiplierMax) > 0 ? Math.floor(Number(m.inputTokenMultiplierMax)) : null,
+      outputTokenMultiplier: Number(m.outputTokenMultiplier) > 1 ? Math.floor(Number(m.outputTokenMultiplier)) : null,
+      outputTokenMultiplierPercent: Number(m.outputTokenMultiplierPercent) > 0 ? Math.min(100, Number(m.outputTokenMultiplierPercent)) : null,
+      outputTokenMultiplierMax: Number(m.outputTokenMultiplierMax) > 0 ? Math.floor(Number(m.outputTokenMultiplierMax)) : null,
       timeSchedule: m.timeSchedule ? {
         enabled: !!m.timeSchedule.enabled,
         startTime: m.timeSchedule.startTime || "00:00",

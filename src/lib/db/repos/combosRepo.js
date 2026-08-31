@@ -12,6 +12,12 @@ export function normalizeComboModels(models) {
         price: null,
         minPrice: null,
         maxInputTokens: null,
+        inputTokenMultiplier: null,
+        inputTokenMultiplierPercent: null,
+        inputTokenMultiplierMax: null,
+        outputTokenMultiplier: null,
+        outputTokenMultiplierPercent: null,
+        outputTokenMultiplierMax: null,
         timeSchedule: {
           enabled: false,
           startTime: "00:00",
@@ -36,6 +42,12 @@ export function normalizeComboModels(models) {
         price: m.price !== undefined && m.price !== null && m.price !== "" ? Number(m.price) : null,
         minPrice: m.minPrice !== undefined && m.minPrice !== null && m.minPrice !== "" ? Number(m.minPrice) : null,
         maxInputTokens: m.maxInputTokens !== undefined && m.maxInputTokens !== null && m.maxInputTokens !== "" && Number(m.maxInputTokens) > 0 ? Math.floor(Number(m.maxInputTokens)) : null,
+        inputTokenMultiplier: m.inputTokenMultiplier !== undefined && Number(m.inputTokenMultiplier) > 1 ? Math.floor(Number(m.inputTokenMultiplier)) : null,
+        inputTokenMultiplierPercent: m.inputTokenMultiplierPercent !== undefined && Number(m.inputTokenMultiplierPercent) > 0 ? Math.min(100, Number(m.inputTokenMultiplierPercent)) : null,
+        inputTokenMultiplierMax: m.inputTokenMultiplierMax !== undefined && Number(m.inputTokenMultiplierMax) > 0 ? Math.floor(Number(m.inputTokenMultiplierMax)) : null,
+        outputTokenMultiplier: m.outputTokenMultiplier !== undefined && Number(m.outputTokenMultiplier) > 1 ? Math.floor(Number(m.outputTokenMultiplier)) : null,
+        outputTokenMultiplierPercent: m.outputTokenMultiplierPercent !== undefined && Number(m.outputTokenMultiplierPercent) > 0 ? Math.min(100, Number(m.outputTokenMultiplierPercent)) : null,
+        outputTokenMultiplierMax: m.outputTokenMultiplierMax !== undefined && Number(m.outputTokenMultiplierMax) > 0 ? Math.floor(Number(m.outputTokenMultiplierMax)) : null,
         timeSchedule: schedule,
       };
     }

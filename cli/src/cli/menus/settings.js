@@ -181,7 +181,7 @@ async function toggleHeadroom(currentlyOn) {
 }
 
 /**
- * Reset dashboard password to default via server API (writes the live SQLite DB).
+ * Reset dashboard password to default via server API (writes PostgreSQL state).
  * After reset, user can log in with the default password "123456".
  */
 async function resetPassword() {

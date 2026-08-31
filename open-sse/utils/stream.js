@@ -8,7 +8,7 @@ import { dbg, isDebugEnabled } from "./debugLog.js";
 
 import { stripThinkingSuffix } from "../translator/concerns/thinkingUnified.js";
 import { SSE_DONE, SSE_HEADERS, SSE_HEADERS_NO_BUFFER } from "./sseConstants.js";
-import { applyResponsePolicy, createReasoningUsagePolicy } from "./reasoningUsagePolicy.js";
+import { applyClientTokenUsagePolicy, applyResponsePolicy, createClientTokenUsagePolicy, createReasoningUsagePolicy } from "./reasoningUsagePolicy.js";
 
 export { COLORS, formatSSE };
 export { SSE_DONE, SSE_HEADERS, SSE_HEADERS_NO_BUFFER };
@@ -48,6 +48,7 @@ export function createSSEStream(options = {}) {
     toolNameMap = null,
     customToolNames = null,
     model = null,
+    policyModel = null,
     connectionId = null,
     body = null,
     onStreamComplete = null,
@@ -71,7 +72,10 @@ export function createSSEStream(options = {}) {
   let ttftAt = null;
   let sseLineCount = 0;
   let sseEmittedCount = 0;
-  const responsePolicy = createReasoningUsagePolicy(body, model);
+  // `model` remains the public name, while policyModel preserves an internal
+  // combo suffix such as `(low)` for policy evaluation.
+  const responsePolicy = createReasoningUsagePolicy(body, policyModel || model);
+  const clientTokenUsagePolicy = createClientTokenUsagePolicy(body);
   const eventTypeCounts = {};
 
   // Track Responses API event framing for same-format passthrough (codex)
@@ -90,7 +94,9 @@ export function createSSEStream(options = {}) {
     const isPassthrough = mode === STREAM_MODE.PASSTHROUGH;
     let finalUsage = isPassthrough ? usage : state?.usage;
 
-    if (!hasValidUsage(finalUsage) && totalContentLength > 0) {
+    // Tool-only streams can have no text but still have an input body. Estimate
+    // them too; otherwise a successful request is persisted as 0/0 usage.
+    if (!hasValidUsage(finalUsage) && body) {
       finalUsage = estimateUsage(body, totalContentLength, isPassthrough ? FORMATS.OPENAI : sourceFormat);
       if (isPassthrough) usage = finalUsage; else state.usage = finalUsage;
     }
@@ -181,12 +187,8 @@ export function createSSEStream(options = {}) {
                 }
               }
 
-              if (parsed?.model && typeof parsed.model === "string") {
-                const targetModel = body?.model || stripThinkingSuffix(parsed.model);
-                if (parsed.model !== targetModel) {
-                  parsed.model = targetModel;
-                  fieldsInjected = true;
-                }
+              if (!hasValuableContent(parsed, FORMATS.OPENAI)) {
+                continue;
               }
 
               const delta = parsed.choices?.[0]?.delta;
@@ -212,29 +214,25 @@ export function createSSEStream(options = {}) {
               if (isFinishChunk && !hasValidUsage(parsed.usage)) {
                 const estimated = estimateUsage(body, totalContentLength, FORMATS.OPENAI);
                 parsed.usage = filterUsageForFormat(estimated, FORMATS.OPENAI);
+                output = `data: ${JSON.stringify(parsed)}\n`;
                 usage = estimated;
                 injectedUsage = true;
               } else if (isFinishChunk && usage) {
                 const buffered = addBufferToUsage(usage);
                 parsed.usage = filterUsageForFormat(buffered, FORMATS.OPENAI);
+                output = `data: ${JSON.stringify(parsed)}\n`;
                 injectedUsage = true;
               } else if (idFixed || fieldsInjected) {
+                output = `data: ${JSON.stringify(parsed)}\n`;
                 injectedUsage = true;
               }
 
-              // Apply public model naming and usage adjustment exactly once,
-              // after a terminal usage payload has been synthesized/buffered.
               applyResponsePolicy(parsed, responsePolicy);
               if (isFinishChunk) {
+                // Keep usage recorded to the report unscaled; only mutate the
+                // response sent to the client after retaining the raw value.
                 usage = extractUsage(parsed) || usage;
-              }
-
-              if (!hasValuableContent(parsed, FORMATS.OPENAI)) {
-                continue;
-              }
-
-              if (injectedUsage || idFixed || fieldsInjected) {
-                output = `data: ${JSON.stringify(parsed)}\n`;
+                applyClientTokenUsagePolicy(parsed, clientTokenUsagePolicy);
               }
             } catch {
               // Skip non-JSON data lines silently — don't forward garbage to clients.
@@ -344,6 +342,7 @@ export function createSSEStream(options = {}) {
           applyResponsePolicy(parsed, responsePolicy);
           const adjustedUsage = extractUsage(parsed);
           if (adjustedUsage) state.usage = adjustedUsage;
+          applyClientTokenUsagePolicy(parsed, clientTokenUsagePolicy);
           const output = formatSSE({ event: openAIResponsesEventName, data: parsed }, sourceFormat);
           reqLogger?.appendConvertedChunk?.(output);
           controller.enqueue(sharedEncoder.encode(output));
@@ -387,12 +386,11 @@ export function createSSEStream(options = {}) {
               item.usage = filterUsageForFormat(buffered, sourceFormat);
             }
 
-            // Do this after terminal usage injection so random/scaled reasoning
-            // is applied once to both the client event and persisted usage.
             applyResponsePolicy(item, responsePolicy);
             if (state.finishReason && isFinishChunk) {
               const adjustedUsage = extractUsage(item);
               if (adjustedUsage) state.usage = adjustedUsage;
+              applyClientTokenUsagePolicy(item, clientTokenUsagePolicy);
             }
 
             const output = formatSSE(item, sourceFormat);
@@ -466,7 +464,6 @@ export function createSSEStream(options = {}) {
             if (translated?.length > 0) {
               for (const item of translated) {
                 if (item === null || item === undefined) continue;
-                applyResponsePolicy(item, responsePolicy);
                 const output = formatSSE(item, sourceFormat);
                 reqLogger?.appendConvertedChunk?.(output);
                 controller.enqueue(sharedEncoder.encode(output));
@@ -488,6 +485,7 @@ export function createSSEStream(options = {}) {
           for (const item of flushed) {
             if (item === null || item === undefined) continue;
             applyResponsePolicy(item, responsePolicy);
+            applyClientTokenUsagePolicy(item, clientTokenUsagePolicy);
             const output = formatSSE(item, sourceFormat);
             reqLogger?.appendConvertedChunk?.(output);
             controller.enqueue(sharedEncoder.encode(output));
@@ -520,7 +518,7 @@ export function createSSEStream(options = {}) {
   });
 }
 
-export function createSSETransformStreamWithLogger(targetFormat, sourceFormat, provider = null, reqLogger = null, toolNameMap = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null, customToolNames = null) {
+export function createSSETransformStreamWithLogger(targetFormat, sourceFormat, provider = null, reqLogger = null, toolNameMap = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null, customToolNames = null, policyModel = null) {
   return createSSEStream({
     mode: STREAM_MODE.TRANSLATE,
     targetFormat,
@@ -530,6 +528,7 @@ export function createSSETransformStreamWithLogger(targetFormat, sourceFormat, p
     toolNameMap,
     customToolNames,
     model,
+    policyModel,
     connectionId,
     body,
     onStreamComplete,
@@ -537,12 +536,13 @@ export function createSSETransformStreamWithLogger(targetFormat, sourceFormat, p
   });
 }
 
-export function createPassthroughStreamWithLogger(provider = null, reqLogger = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null) {
+export function createPassthroughStreamWithLogger(provider = null, reqLogger = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null, policyModel = null) {
   return createSSEStream({
     mode: STREAM_MODE.PASSTHROUGH,
     provider,
     reqLogger,
     model,
+    policyModel,
     connectionId,
     body,
     onStreamComplete,

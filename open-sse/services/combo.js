@@ -601,7 +601,7 @@ export async function handleComboChat({
       const comboBody = { ...body, model: comboName || body?.model };
       // Internal-only marker for the final response policy. It is intentionally
       // non-enumerable so it cannot be translated or forwarded upstream.
-      markComboModelRequest(comboBody);
+      markComboModelRequest(comboBody, rawModel, comboName || body?.model);
       const result = await handleSingleModel(comboBody, modelStr);
       
       // Success (2xx) - return response

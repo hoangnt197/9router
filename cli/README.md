@@ -100,9 +100,8 @@ Any tool supporting OpenAI/Claude-compatible API works.
 
 ## 💾 Data Location
 
-- **macOS/Linux**: `~/.9router/db/data.sqlite`
-- **Windows**: `%APPDATA%/9router/db/data.sqlite`
-- **Docker**: `/app/data/db/data.sqlite` (mount `$HOME/.9router` to persist)
+- **All platforms**: configure `NINE_ROUTER_DATABASE_URL` for PostgreSQL persistence.
+- **Multi-instance deployments**: configure `NINE_ROUTER_REDIS_URL` for shared coordination.
 
 ---
 
