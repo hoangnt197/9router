@@ -29,15 +29,20 @@ export async function getCustomModels() {
   return Object.values(all);
 }
 
-// Atomic check-then-insert inside transaction to prevent duplicate races
-export async function addCustomModel({ providerAlias, id, type = "llm", name }) {
+// Atomic upsert inside transaction to prevent duplicate races.
+// Re-adding an existing model updates caps/name without resetting omitted fields.
+export async function addCustomModel({ providerAlias, id, type = "llm", name, caps }) {
   const k = customKey(providerAlias, id, type);
   const db = await getAdapter();
-  let added = false;
   await db.transaction(async (tx) => {
-    const row = await tx.get(`SELECT 1 FROM kv WHERE scope = 'customModels' AND key = ?`, [k]);
-    if (row) return;
-    const value = stringifyJson({ providerAlias, id, type, name: name || id });
+    const row = await tx.get(`SELECT value FROM kv WHERE scope = 'customModels' AND key = ?`, [k]);
+    if (row) {
+      const prev = parseJson(row.value) || {};
+      const next = { ...prev, ...(name ? { name } : {}), ...(caps ? { caps } : {}) };
+      await tx.run(`UPDATE kv SET value = ? WHERE scope = 'customModels' AND key = ?`, [stringifyJson(next), k]);
+      return;
+    }
+    const value = stringifyJson({ providerAlias, id, type, name: name || id, ...(caps ? { caps } : {}) });
     await tx.run(`INSERT INTO kv(scope, key, value) VALUES('customModels', ?, ?)`, [k, value]);
     added = true;
   });

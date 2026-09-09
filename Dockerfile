@@ -2,6 +2,8 @@
 ARG NODE_IMAGE=node:22-alpine
 FROM ${NODE_IMAGE} AS base
 WORKDIR /app
+# CN mirror for apk (used by builder and runner stages)
+RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.aliyun.com|g' /etc/apk/repositories
 
 FROM base AS builder
 
@@ -60,6 +62,8 @@ COPY --from=builder /app/node_modules/postgres-bytea ./node_modules/postgres-byt
 COPY --from=builder /app/node_modules/postgres-date ./node_modules/postgres-date
 COPY --from=builder /app/node_modules/postgres-interval ./node_modules/postgres-interval
 COPY --from=builder /app/node_modules/split2 ./node_modules/split2
+# node-machine-id is createRequire-loaded at runtime; tracing omits it.
+COPY --from=builder /app/node_modules/node-machine-id ./node_modules/node-machine-id
 
 RUN mkdir -p /app/data && chown -R node:node /app && \
   mkdir -p /app/data-home && chown node:node /app/data-home && \
