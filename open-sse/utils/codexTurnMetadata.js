@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
-import { machineIdSync } from "node-machine-id";
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
+const { machineIdSync } = require("node-machine-id");
 import { v7 as uuidv7 } from "uuid";
 
 import { CODEX_CLIENT_CONFIG } from "../config/codexClientConfig.js";

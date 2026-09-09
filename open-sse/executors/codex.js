@@ -52,7 +52,7 @@ const CODEX_PASSTHROUGH_TOOL_TYPES = new Set(["custom"]);
 const RESPONSES_API_ALLOWLIST = new Set([
   "model", "input", "instructions", "tools", "tool_choice", "stream", "store",
   "reasoning", "service_tier", "include", "prompt_cache_key", "client_metadata",
-  "text"
+  "text", "parallel_tool_calls"
 ]);
 
 // Convert role=system → role=developer in body.input (keeps content in cacheable prefix)
@@ -435,6 +435,9 @@ export class CodexExecutor extends BaseExecutor {
     stripStoredItemReferences(body);
     // Flatten function tools + drop unsupported types
     normalizeCodexTools(body);
+
+    // Codex Responses API gateway (Responses Lite) strictly requires parallel_tool_calls: false on all requests
+    body.parallel_tool_calls = false;
 
     // Ensure streaming is enabled (Codex API requires it)
     body.stream = true;

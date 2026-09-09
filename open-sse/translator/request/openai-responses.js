@@ -428,6 +428,9 @@ export function openaiToOpenAIResponsesRequest(model, body, stream, credentials)
     });
   }
 
+  // Responses API gateway strictly requires parallel_tool_calls: false
+  result.parallel_tool_calls = false;
+
   // Pass through other relevant fields
   if (body.temperature !== undefined) result.temperature = body.temperature;
   if (body.max_output_tokens !== undefined) {
