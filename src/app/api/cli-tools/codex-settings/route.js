@@ -7,28 +7,22 @@ import fs from "fs/promises";
 import path from "path";
 import os from "os";
 import { parseTOML, stringifyTOML } from "confbox";
+import {
+  applyCodexSettings,
+  getCodexSettings,
+  has9RouterConfig,
+} from "./configUtils.js";
 
 const execAsync = promisify(exec);
 
-const getCodexDir = () => path.join(os.homedir(), ".codex");
-const getCodexConfigPath = () => path.join(getCodexDir(), "config.toml");
-const getCodexAuthPath = () => path.join(getCodexDir(), "auth.json");
+const getCodexConfigPath = () => process.env.CODEX_CONFIG_PATH?.trim()
+  || path.join(os.homedir(), ".codex", "config.toml");
+const getCodexDir = () => path.dirname(getCodexConfigPath());
+const getCodexAuthPath = () => process.env.CODEX_AUTH_PATH?.trim()
+  || path.join(os.homedir(), ".codex", "auth.json");
 
 // Flatten confbox-parsed TOML into a writable object, preserving nested tables
 const parsedToWritable = (obj) => obj ?? {};
-
-// Set a nested key from a flat dotted path, creating intermediate objects as needed
-const setNestedSection = (obj, dottedKey, value) => {
-  const keys = dottedKey.split(".");
-  let cur = obj;
-  for (let i = 0; i < keys.length - 1; i++) {
-    if (cur[keys[i]] == null || typeof cur[keys[i]] !== "object") {
-      cur[keys[i]] = {};
-    }
-    cur = cur[keys[i]];
-  }
-  cur[keys[keys.length - 1]] = value;
-};
 
 // Delete a nested key from a flat dotted path
 const deleteNestedSection = (obj, dottedKey) => {
@@ -61,22 +55,16 @@ const checkCodexInstalled = async () => {
   }
 };
 
-// Read current config.toml
+// Read and parse current config.toml once per request.
 const readConfig = async () => {
   try {
     const configPath = getCodexConfigPath();
     const content = await fs.readFile(configPath, "utf-8");
-    return content;
+    return { content, parsed: parsedToWritable(parseTOML(content)) };
   } catch (error) {
-    if (error.code === "ENOENT") return null;
+    if (error.code === "ENOENT") return { content: null, parsed: {} };
     throw error;
   }
-};
-
-// Check if config has 9Router settings
-const has9RouterConfig = (config) => {
-  if (!config) return false;
-  return config.includes("model_provider = \"9router\"") || config.includes("[model_providers.9router]");
 };
 
 // GET - Check codex CLI and read current settings
@@ -92,12 +80,13 @@ export async function GET() {
       });
     }
 
-    const config = await readConfig();
+    const { content, parsed } = await readConfig();
 
     return NextResponse.json({
       installed: true,
-      config,
-      has9Router: has9RouterConfig(config),
+      config: content,
+      settings: getCodexSettings(parsed),
+      has9Router: has9RouterConfig(parsed),
       configPath: getCodexConfigPath(),
     });
   } catch (error) {
@@ -109,7 +98,8 @@ export async function GET() {
 // POST - Update 9Router settings (merge with existing config)
 export async function POST(request) {
   try {
-    const { baseUrl, apiKey, model, subagentModel } = await request.json();
+    const payload = await request.json();
+    const { baseUrl, apiKey, model } = payload;
     
     if (!baseUrl || !apiKey || !model) {
       return NextResponse.json({ error: "baseUrl, apiKey and model are required" }, { status: 400 });
@@ -128,24 +118,7 @@ export async function POST(request) {
       parsed = parsedToWritable(parseTOML(existingConfig));
     } catch { /* No existing config */ }
 
-    // Update only 9Router related fields (api_key goes to auth.json, not config.toml)
-    parsed.model = model;
-    parsed.model_provider = "9router";
-
-    // Update or create 9router provider section (no api_key - Codex reads from auth.json)
-    // Ensure /v1 suffix is added only once
-    const normalizedBaseUrl = baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
-    // Custom providers ignore auth.json - the key must travel as a static header
-    setNestedSection(parsed, "model_providers.9router", {
-      name: "9Router",
-      base_url: normalizedBaseUrl,
-      wire_api: "responses",
-      http_headers: { Authorization: `Bearer ${apiKey}` },
-    });
-
-    // Subagent model is a scalar under [agents]; agents.<role> now means a custom role
-    deleteNestedSection(parsed, "agents.subagent");
-    setNestedSection(parsed, "agents.default_subagent_model", subagentModel || model);
+    parsed = applyCodexSettings(parsed, payload);
 
     // Write merged config
     const configContent = stringifyTOML(parsed);
@@ -158,6 +131,9 @@ export async function POST(request) {
     });
   } catch (error) {
     console.log("Error updating codex settings:", error);
+    if (/header|environment variable/i.test(error.message || "")) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     return NextResponse.json({ error: "Failed to update codex settings" }, { status: 500 });
   }
 }

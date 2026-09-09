@@ -21,6 +21,11 @@ export function openaiResponsesToOpenAIRequest(model, body, stream, credentials)
 
   const result = { ...body };
   result.messages = [];
+  // Keep the routing decision explicit on the wire. Responses clients often
+  // omit `stream`; without this field an OpenAI-compatible chat endpoint can
+  // choose a response mode based on its own defaults/Accept handling, which
+  // makes LiteLLM's JSON parser receive an unexpected SSE stream.
+  result.stream = stream === true;
 
   // Convert instructions to system message
   if (body.instructions) {

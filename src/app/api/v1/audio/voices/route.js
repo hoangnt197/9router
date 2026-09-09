@@ -7,6 +7,7 @@ const PROVIDER_API = {
   inworld: (origin) => `${origin}/api/media-providers/tts/inworld/voices`,
   "edge-tts": (origin) => `${origin}/api/media-providers/tts/voices?provider=edge-tts`,
   "local-device": (origin) => `${origin}/api/media-providers/tts/voices?provider=local-device`,
+  "selfhosted-tts": (origin) => `${origin}/api/media-providers/tts/selfhosted-tts/voices`,
 };
 
 export async function OPTIONS() {
@@ -53,7 +54,9 @@ export async function GET(request) {
       name: v.name,
       lang: v.lang || "",
       gender: v.gender || "",
-      model: `${alias}/${v.id}`,
+      model: provider === "selfhosted-tts" && v.model
+        ? `${alias}/${v.model}/${v.id}`
+        : `${alias}/${v.id}`,
     }));
 
     return Response.json({ object: "list", data: data_out }, {

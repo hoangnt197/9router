@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Card } from "@/shared/components";
 import { AI_PROVIDERS, getProviderAlias } from "@/shared/constants/providers";
 import { getModelsByProviderId, getModelKind } from "@/shared/constants/models";
@@ -65,6 +65,7 @@ export function TtsExampleCard({ providerId }) {
   const [languageHint, setLanguageHint]     = useState("");
   // Number of stored provider connections (shown when no dashboard API key)
   const [connectionCount, setConnectionCount] = useState(0);
+  const voiceRequestIdRef = useRef(0);
 
   useEffect(() => {
     setLocalEndpoint(window.location.origin);
@@ -126,12 +127,27 @@ export function TtsExampleCard({ providerId }) {
     }
   }, [selectedModel]);
 
+  // API-backed catalogues may differ by model. Clear every dependent selection
+  // so a voice from the previous model cannot be submitted accidentally.
+  useEffect(() => {
+    if (config.voiceSource !== "api-language" || !config.hasModelSelector) return;
+    voiceRequestIdRef.current += 1;
+    setLanguages([]);
+    setByLang({});
+    setCountryVoices([]);
+    setSelectedLang("");
+    setSelectedVoice("");
+    setSelectedVoiceName("");
+    if (config.hasVoiceIdInput) setVoiceId("");
+  }, [providerId, selectedModel]);
+
   // Open modal — load language list
   const openModal = async () => {
     setModalOpen(true);
     setModalSearch("");
     setModalError("");
     if (languages.length) return; // already loaded
+    const requestId = ++voiceRequestIdRef.current;
     setModalLoading(true);
     try {
       if (config.voiceSource === "hardcoded") {
@@ -146,19 +162,24 @@ export function TtsExampleCard({ providerId }) {
         setLanguages(Object.values(byLangMap).sort((a, b) => a.name.localeCompare(b.name)));
       } else {
         // Use provider-specific apiEndpoint if available, else default to edge-tts voices API
+        const modelQuery = config.hasModelSelector && selectedModel
+          ? `model=${encodeURIComponent(selectedModel)}`
+          : "";
         const url = config.apiEndpoint
-          ? config.apiEndpoint
+          ? `${config.apiEndpoint}${config.apiEndpoint.includes("?") ? "&" : "?"}${modelQuery}`
           : `/api/media-providers/tts/voices?provider=${providerId === "local-device" ? "local-device" : "edge-tts"}`;
         const r = await fetch(url);
         const d = await r.json();
+        if (requestId !== voiceRequestIdRef.current) return;
         if (d.error) { setModalError(d.error); return; }
         setLanguages(d.languages || []);
         setByLang(d.byLang || {});
       }
     } catch (e) {
+      if (requestId !== voiceRequestIdRef.current) return;
       setModalError(e.message);
     } finally {
-      setModalLoading(false);
+      if (requestId === voiceRequestIdRef.current) setModalLoading(false);
     }
   };
 

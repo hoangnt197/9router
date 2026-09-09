@@ -328,6 +328,7 @@ function ComboCard({ combo, getCaps, activeProviders = [], copied, onCopy, onEdi
                   const hasSchedule = typeof item === "object" && item.timeSchedule?.enabled;
                   const scheduleStr = hasSchedule ? `${item.timeSchedule.startTime || "00:00"}-${item.timeSchedule.endTime || "23:59"}` : null;
                   const maxInputTokens = typeof item === "object" && Number(item.maxInputTokens) > 0 ? Number(item.maxInputTokens) : null;
+                  const headroomMinInputTokens = typeof item === "object" && Number(item.headroomMinInputTokens) > 0 ? Number(item.headroomMinInputTokens) : null;
 
                   return (
                     <code key={index} className="inline-flex items-center gap-1 rounded bg-black/5 px-1.5 py-0.5 font-mono text-xs text-text-muted dark:bg-white/5">
@@ -340,6 +341,11 @@ function ComboCard({ combo, getCaps, activeProviders = [], copied, onCopy, onEdi
                       {maxInputTokens && (
                         <span className="rounded bg-sky-500/10 px-1 py-0.2 text-[10px] text-sky-600 dark:text-sky-400 font-medium" title="Maximum estimated input tokens">
                           ≤ {maxInputTokens.toLocaleString()} in
+                        </span>
+                      )}
+                      {headroomMinInputTokens && (
+                        <span className="rounded bg-cyan-500/10 px-1 py-0.2 text-[10px] text-cyan-600 dark:text-cyan-400 font-medium" title="Compress above estimated input tokens">
+                          &gt; {headroomMinInputTokens.toLocaleString()} in
                         </span>
                       )}
                       {hasSchedule && (

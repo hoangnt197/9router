@@ -41,13 +41,14 @@ function ModelItem({
 }) {
   const [editingName, setEditingName] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  const [activeTab, setActiveTab] = useState("pricing"); // "pricing" | "tokens" | "schedule"
+  const [activeTab, setActiveTab] = useState("pricing"); // "pricing" | "tokens" | "compress" | "schedule"
 
   const modelName = typeof item === "object" ? item.model : item;
   const pricingType = (typeof item === "object" && (item.pricingType === "token" || item.pricingType === "input_token")) ? "token" : "request";
   const price = (typeof item === "object" && item.price !== null && item.price !== undefined) ? item.price : "";
   const minPrice = (typeof item === "object" && item.minPrice !== null && item.minPrice !== undefined) ? item.minPrice : "";
   const maxInputTokens = (typeof item === "object" && item.maxInputTokens !== null && item.maxInputTokens !== undefined) ? item.maxInputTokens : "";
+  const headroomMinInputTokens = (typeof item === "object" && item.headroomMinInputTokens !== null && item.headroomMinInputTokens !== undefined) ? item.headroomMinInputTokens : "";
   const inputTokenMultiplier = (typeof item === "object" && item.inputTokenMultiplier !== null && item.inputTokenMultiplier !== undefined) ? item.inputTokenMultiplier : "";
   const inputTokenMultiplierPercent = (typeof item === "object" && item.inputTokenMultiplierPercent !== null && item.inputTokenMultiplierPercent !== undefined) ? item.inputTokenMultiplierPercent : "";
   const inputTokenMultiplierMax = (typeof item === "object" && item.inputTokenMultiplierMax !== null && item.inputTokenMultiplierMax !== undefined) ? item.inputTokenMultiplierMax : "";
@@ -83,6 +84,7 @@ function ModelItem({
 
   const hasPrice = price !== "" && price !== null && price !== undefined && Number(price) >= 0;
   const hasMaxInputTokens = maxInputTokens !== "" && Number(maxInputTokens) > 0;
+  const hasHeadroomThreshold = headroomMinInputTokens !== "" && Number(headroomMinInputTokens) > 0;
   const hasTokenRules = (Number(inputTokenMultiplier) > 1 && Number(inputTokenMultiplierPercent) > 0)
     || (Number(outputTokenMultiplier) > 1 && Number(outputTokenMultiplierPercent) > 0);
   const priceLabel = hasPrice
@@ -140,7 +142,7 @@ function ModelItem({
             className={`flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium transition-colors ${
               expanded
                 ? "bg-primary text-white shadow-xs"
-                : (hasPrice || hasMaxInputTokens || hasTokenRules || isScheduleEnabled)
+                : (hasPrice || hasMaxInputTokens || hasHeadroomThreshold || hasTokenRules || isScheduleEnabled)
                   ? "bg-primary/10 text-primary hover:bg-primary/20"
                   : "bg-black/5 text-text-muted hover:text-text-main hover:bg-black/10 dark:bg-white/5 dark:hover:bg-white/10"
             }`}
@@ -224,6 +226,18 @@ function ModelItem({
           </button>
         )}
 
+        {hasHeadroomThreshold && (
+          <button
+            type="button"
+            onClick={() => { setExpanded(true); setActiveTab("compress"); }}
+            className="inline-flex items-center gap-1 rounded bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-mono font-medium text-cyan-600 hover:bg-cyan-500/20 dark:text-cyan-400"
+            title="Compress when estimated input exceeds this threshold"
+          >
+            <span className="material-symbols-outlined text-[11px]">compress</span>
+            <span>&gt; {Number(headroomMinInputTokens).toLocaleString()} in</span>
+          </button>
+        )}
+
         {isScheduleEnabled && (
           <button
             type="button"
@@ -266,6 +280,18 @@ function ModelItem({
               >
                 <span className="material-symbols-outlined text-[14px]">functions</span>
                 Tokens
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("compress")}
+                className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-colors ${
+                  activeTab === "compress"
+                    ? "bg-primary/10 text-primary"
+                    : "text-text-muted hover:text-text-main"
+                }`}
+              >
+                <span className="material-symbols-outlined text-[14px]">compress</span>
+                Compress
               </button>
               <button
                 type="button"
@@ -416,7 +442,29 @@ function ModelItem({
                   </div>
                 </div>
               ))}
-              <p className="text-[9px] text-text-muted italic">Cap limits multiplication only. Example: 4 tokens, ×5, cap 10 → ×2 = 8.</p>
+              <p className="text-[9px] text-text-muted italic">Input cache fields use the same applied input factor. Totals are recalculated per response format. Cap limits multiplication only: 4 tokens, ×5, cap 10 → ×2 = 8.</p>
+            </div>
+          )}
+
+          {activeTab === "compress" && (
+            <div className="space-y-2">
+              <div>
+                <label className="text-[10px] font-medium text-text-muted block mb-0.5">
+                  Compress &gt; input
+                </label>
+                <input
+                  type="number"
+                  step="1"
+                  min="1"
+                  placeholder="Off"
+                  value={headroomMinInputTokens}
+                  onChange={(e) => onEditConfig({ headroomMinInputTokens: e.target.value })}
+                  className="w-full rounded border border-black/10 dark:border-white/10 bg-white dark:bg-black/20 px-2 py-1 font-mono text-xs outline-none focus:border-primary"
+                />
+              </div>
+              <p className="text-[9px] text-text-muted italic">
+                Headroom runs only when estimated input is above this value. Each fallback model uses its own threshold.
+              </p>
             </div>
           )}
 
@@ -552,6 +600,7 @@ export default function ComboFormModal({ isOpen, combo, onClose, onSave, activeP
         price: "",
         minPrice: "",
         maxInputTokens: "",
+        headroomMinInputTokens: "",
         inputTokenMultiplier: "",
         inputTokenMultiplierPercent: "",
         inputTokenMultiplierMax: "",
@@ -571,6 +620,7 @@ export default function ComboFormModal({ isOpen, combo, onClose, onSave, activeP
       price: m.price !== undefined && m.price !== null ? m.price : "",
       minPrice: m.minPrice !== undefined && m.minPrice !== null ? m.minPrice : "",
       maxInputTokens: m.maxInputTokens !== undefined && m.maxInputTokens !== null ? m.maxInputTokens : "",
+      headroomMinInputTokens: m.headroomMinInputTokens !== undefined && m.headroomMinInputTokens !== null ? m.headroomMinInputTokens : "",
       inputTokenMultiplier: m.inputTokenMultiplier !== undefined && m.inputTokenMultiplier !== null ? m.inputTokenMultiplier : "",
       inputTokenMultiplierPercent: m.inputTokenMultiplierPercent !== undefined && m.inputTokenMultiplierPercent !== null ? m.inputTokenMultiplierPercent : "",
       inputTokenMultiplierMax: m.inputTokenMultiplierMax !== undefined && m.inputTokenMultiplierMax !== null ? m.inputTokenMultiplierMax : "",
@@ -627,6 +677,7 @@ export default function ComboFormModal({ isOpen, combo, onClose, onSave, activeP
         price: sysPrice !== null ? sysPrice : "",
         minPrice: "",
         maxInputTokens: "",
+        headroomMinInputTokens: "",
         inputTokenMultiplier: "",
         inputTokenMultiplierPercent: "",
         inputTokenMultiplierMax: "",
@@ -682,6 +733,7 @@ export default function ComboFormModal({ isOpen, combo, onClose, onSave, activeP
       price: m.price !== "" && m.price !== null && m.price !== undefined ? parseFloat(m.price) : null,
       minPrice: m.minPrice !== "" && m.minPrice !== null && m.minPrice !== undefined ? parseFloat(m.minPrice) : null,
       maxInputTokens: m.maxInputTokens !== "" && m.maxInputTokens !== null && m.maxInputTokens !== undefined ? Math.floor(Number(m.maxInputTokens)) : null,
+      headroomMinInputTokens: m.headroomMinInputTokens !== "" && m.headroomMinInputTokens !== null && m.headroomMinInputTokens !== undefined && Number(m.headroomMinInputTokens) > 0 ? Math.floor(Number(m.headroomMinInputTokens)) : null,
       inputTokenMultiplier: Number(m.inputTokenMultiplier) > 1 ? Math.floor(Number(m.inputTokenMultiplier)) : null,
       inputTokenMultiplierPercent: Number(m.inputTokenMultiplierPercent) > 0 ? Math.min(100, Number(m.inputTokenMultiplierPercent)) : null,
       inputTokenMultiplierMax: Number(m.inputTokenMultiplierMax) > 0 ? Math.floor(Number(m.inputTokenMultiplierMax)) : null,

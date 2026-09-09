@@ -24,12 +24,36 @@ const CODEX_SOURCE_TO_TARGET = {
 /**
  * Determine which SSE transform stream to use based on provider/format.
  */
-function buildTransformStream({ provider, sourceFormat, targetFormat, userAgent, reqLogger, toolNameMap, customToolNames, model, clientRequestedModel, connectionId, body, onStreamComplete, apiKey }) {
+export function buildTransformStream({ provider, sourceFormat, targetFormat, userAgent, reqLogger, toolNameMap, customToolNames, model, clientRequestedModel, connectionId, body, onStreamComplete, apiKey }) {
   const isDroidCLI = userAgent?.toLowerCase().includes("droid") || userAgent?.toLowerCase().includes("codex-cli");
-  // Responses-API providers (e.g. codex) emit Responses SSE → translate into client format
+  // Responses-API providers (e.g. codex) emit Responses SSE → translate into client format.
+  // When both sides already speak Responses, keep the response-event framing and
+  // let the Responses-aware path in createSSEStream handle usage/terminal events.
+  // Falling through to the generic passthrough loses response.* events because
+  // that path only understands Chat Completions chunks with `choices`.
   const isResponsesProvider = PROVIDERS[provider]?.format === FORMATS.OPENAI_RESPONSES;
-  const needsCodexTranslation = isResponsesProvider && targetFormat === FORMATS.OPENAI_RESPONSES && !isDroidCLI;
+  const isNativeResponsesStream = isResponsesProvider
+    && targetFormat === FORMATS.OPENAI_RESPONSES
+    && sourceFormat === FORMATS.OPENAI_RESPONSES;
+  const needsCodexTranslation = isResponsesProvider && targetFormat === FORMATS.OPENAI_RESPONSES && !isDroidCLI && !isNativeResponsesStream;
   const clientModel = clientRequestedModel || body?.model || stripThinkingSuffix(model);
+
+  if (isNativeResponsesStream) {
+    return createSSETransformStreamWithLogger(
+      FORMATS.OPENAI_RESPONSES,
+      FORMATS.OPENAI_RESPONSES,
+      provider,
+      reqLogger,
+      toolNameMap,
+      clientModel,
+      connectionId,
+      body,
+      onStreamComplete,
+      apiKey,
+      customToolNames,
+      model
+    );
+  }
 
   if (needsCodexTranslation) {
     const codexTarget = CODEX_SOURCE_TO_TARGET[sourceFormat] || FORMATS.OPENAI;

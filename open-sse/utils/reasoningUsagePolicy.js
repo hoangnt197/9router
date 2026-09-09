@@ -11,6 +11,18 @@ const COMBO_MODEL_TOKEN_RULES = "__shortlabComboTokenRules";
 const COMBO_ORIGINAL_NAME = "__shortlabOriginalComboName";
 const CLIENT_USAGE_APPLIED = "__shortlabClientUsageApplied";
 
+export function isComboModelRequest(body) {
+  return body?.[COMBO_MODEL_MARKER] === true;
+}
+
+// Headroom is configured per combo member so fallback models can use different
+// thresholds. Keep the marker private and expose only the validated value.
+export function getComboHeadroomMinInputTokens(body) {
+  if (!isComboModelRequest(body)) return null;
+  const value = Number(body?.[COMBO_MODEL_TOKEN_RULES]?.headroomMinInputTokens);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : null;
+}
+
 function reportComboName(value) {
   return typeof value === "string"
     ? value.replace(/\((?:low|medium|high|xhigh|max|ultra)\)\s*$/i, "").trim()
@@ -121,27 +133,63 @@ export function createClientTokenUsagePolicy(body) {
   return input || output ? { input, output } : null;
 }
 
-function multiplyTokenCount(value, rule, random) {
-  if (!rule || !Number.isFinite(value) || value <= 0 || random() * 100 >= rule.chance) return value;
+function appliedTokenMultiplier(value, rule, random) {
+  if (!rule || !Number.isFinite(value) || value <= 0 || random() * 100 >= rule.chance) return 1;
   let multiplier = rule.multiplier;
   // The cap limits multiplication only: never reduce a real upstream value.
   if (rule.maxTokens && value <= rule.maxTokens) {
     multiplier = Math.min(multiplier, Math.floor(rule.maxTokens / value));
   }
-  return multiplier > 1 ? value * multiplier : value;
+  return multiplier > 1 ? multiplier : 1;
 }
 
-function applyUsageMultiplier(usage, inputKey, outputKey, totalKey, policy, random) {
+function scaleTokenField(target, key, multiplier) {
+  if (!target || multiplier <= 1 || !Number.isFinite(Number(target[key]))) return;
+  target[key] = Number(target[key]) * multiplier;
+}
+
+function scaleInputCacheBreakdown(usage, multiplier) {
+  if (multiplier <= 1) return;
+  scaleTokenField(usage, "cached_tokens", multiplier);
+  scaleTokenField(usage, "cache_read_input_tokens", multiplier);
+  scaleTokenField(usage, "cache_creation_input_tokens", multiplier);
+  scaleTokenField(usage.prompt_tokens_details, "cached_tokens", multiplier);
+  scaleTokenField(usage.prompt_tokens_details, "cache_creation_tokens", multiplier);
+  scaleTokenField(usage.input_tokens_details, "cached_tokens", multiplier);
+  scaleTokenField(usage, "cachedContentTokenCount", multiplier);
+}
+
+function inputMultiplierBasis(usage, inputKey, input) {
+  // Claude reports cache read/write outside input_tokens, unlike OpenAI and
+  // Responses where cached tokens are already a subset of the input count.
+  if (inputKey === "input_tokens"
+      && usage.input_tokens_details === undefined
+      && (usage.cache_read_input_tokens !== undefined || usage.cache_creation_input_tokens !== undefined)) {
+    return input
+      + (Number(usage.cache_read_input_tokens) || 0)
+      + (Number(usage.cache_creation_input_tokens) || 0);
+  }
+  return input;
+}
+
+function applyUsageMultiplier(usage, inputKey, outputKey, totalKey, policy, random, options = {}) {
   if (!usage || typeof usage !== "object" || usage[CLIENT_USAGE_APPLIED]) return;
   Object.defineProperty(usage, CLIENT_USAGE_APPLIED, { value: true, enumerable: false });
   const input = Number(usage[inputKey]);
   const output = Number(usage[outputKey]);
-  const nextInput = multiplyTokenCount(input, policy?.input, random);
-  const nextOutput = multiplyTokenCount(output, policy?.output, random);
-  const delta = (Number.isFinite(nextInput) ? nextInput - input : 0) + (Number.isFinite(nextOutput) ? nextOutput - output : 0);
+  const inputMultiplier = appliedTokenMultiplier(inputMultiplierBasis(usage, inputKey, input), policy?.input, random);
+  const outputMultiplier = appliedTokenMultiplier(output, policy?.output, random);
+  const nextInput = Number.isFinite(input) ? input * inputMultiplier : input;
+  const nextOutput = Number.isFinite(output) ? output * outputMultiplier : output;
   if (Number.isFinite(nextInput)) usage[inputKey] = nextInput;
   if (Number.isFinite(nextOutput)) usage[outputKey] = nextOutput;
-  if (delta && Number.isFinite(usage[totalKey])) usage[totalKey] += delta;
+  scaleInputCacheBreakdown(usage, inputMultiplier);
+
+  if (options.recalculateTotal && Number.isFinite(nextInput) && Number.isFinite(nextOutput)) {
+    const extraTokens = (options.totalExtraKeys || [])
+      .reduce((sum, key) => sum + (Number(usage[key]) || 0), 0);
+    usage[totalKey] = nextInput + nextOutput + extraTokens;
+  }
 }
 
 /** Apply combo token presentation rules only to the payload that goes to the client. */
@@ -151,14 +199,21 @@ export function applyClientTokenUsagePolicy(payload, policy, random = Math.rando
   const usage = target.usage;
   if (usage && typeof usage === "object") {
     if (usage.input_tokens !== undefined || usage.output_tokens !== undefined) {
-      applyUsageMultiplier(usage, "input_tokens", "output_tokens", "total_tokens", policy, random);
+      applyUsageMultiplier(usage, "input_tokens", "output_tokens", "total_tokens", policy, random, {
+        recalculateTotal: target.object === "response" || usage.total_tokens !== undefined,
+      });
     } else {
-      applyUsageMultiplier(usage, "prompt_tokens", "completion_tokens", "total_tokens", policy, random);
+      applyUsageMultiplier(usage, "prompt_tokens", "completion_tokens", "total_tokens", policy, random, {
+        recalculateTotal: true,
+      });
     }
   }
   const metadata = target.usageMetadata;
   if (metadata && typeof metadata === "object") {
-    applyUsageMultiplier(metadata, "promptTokenCount", "candidatesTokenCount", "totalTokenCount", policy, random);
+    applyUsageMultiplier(metadata, "promptTokenCount", "candidatesTokenCount", "totalTokenCount", policy, random, {
+      recalculateTotal: true,
+      totalExtraKeys: ["thoughtsTokenCount"],
+    });
   }
   return payload;
 }

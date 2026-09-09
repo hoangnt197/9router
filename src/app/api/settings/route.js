@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import { getSettings, updateSettings } from "@/lib/localDb";
 import { applyOutboundProxyEnv } from "@/lib/network/outboundProxy";
 import { resetComboRotation } from "open-sse/services/combo.js";
+import {
+  CodexHeaderValidationError,
+  sanitizeCodexUpstreamHeaders,
+} from "open-sse/utils/codexClientHeaders.js";
 import bcrypt from "bcryptjs";
 
 export const dynamic = "force-dynamic";
@@ -41,6 +45,18 @@ export async function PATCH(request) {
 
     // Strip protected secrets before any internal handling sets them
     for (const key of PROTECTED_SETTING_KEYS) delete body[key];
+
+    if (Object.prototype.hasOwnProperty.call(body, "providerUpstreamHeaders")) {
+      if (!body.providerUpstreamHeaders || typeof body.providerUpstreamHeaders !== "object" || Array.isArray(body.providerUpstreamHeaders)) {
+        return NextResponse.json({ error: "Provider upstream headers must be an object" }, { status: 400 });
+      }
+      body.providerUpstreamHeaders = {
+        ...body.providerUpstreamHeaders,
+        ...(Object.prototype.hasOwnProperty.call(body.providerUpstreamHeaders, "codex")
+          ? { codex: sanitizeCodexUpstreamHeaders(body.providerUpstreamHeaders.codex) }
+          : {}),
+      };
+    }
 
     // If updating password, hash it
     if (body.newPassword) {
@@ -113,6 +129,9 @@ export async function PATCH(request) {
     return NextResponse.json(safeSettings, { headers: SETTINGS_RESPONSE_HEADERS });
   } catch (error) {
     console.log("Error updating settings:", error);
+    if (error instanceof CodexHeaderValidationError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }

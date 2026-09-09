@@ -14,6 +14,11 @@ import { useModelCaps } from "@/shared/hooks/useModelCaps";
 import { translate } from "@/i18n/runtime";
 import { fetchSuggestedModels } from "@/shared/utils/providerModelsFetcher";
 import { getProviderCustomModelRows } from "@/shared/utils/providerCustomModels";
+import HeaderRowsEditor, {
+  activeHeaderRows,
+  headerRecordToRows,
+  headerRowsToRecord,
+} from "@/shared/components/HeaderRowsEditor";
 import ModelRow from "./ModelRow";
 import PassthroughModelsSection from "./PassthroughModelsSection";
 import CompatibleModelsSection from "./CompatibleModelsSection";
@@ -66,6 +71,9 @@ export default function ProviderDetailPage() {
   const [bulkUpdatingProxy, setBulkUpdatingProxy] = useState(false);
   const [providerStrategy, setProviderStrategy] = useState(null);
   const [providerStickyLimit, setProviderStickyLimit] = useState("");
+  const [providerUpstreamHeaders, setProviderUpstreamHeaders] = useState([]);
+  const [savingProviderHeaders, setSavingProviderHeaders] = useState(false);
+  const [providerHeadersMessage, setProviderHeadersMessage] = useState(null);
   const [thinkingMode, setThinkingMode] = useState("auto");
   const [autoPing, setAutoPing] = useState({ enabled: false, connections: {} });
   const [suggestedModels, setSuggestedModels] = useState([]);
@@ -315,6 +323,7 @@ export default function ProviderDetailPage() {
       const override = (settingsData.providerStrategies || {})[providerId] || {};
       setProviderStrategy(override.fallbackStrategy || null);
       setProviderStickyLimit(override.stickyRoundRobinLimit != null ? String(override.stickyRoundRobinLimit) : "1");
+      setProviderUpstreamHeaders(headerRecordToRows((settingsData.providerUpstreamHeaders || {})[providerId]));
       // Load per-provider thinking config
       const thinkingCfg = (settingsData.providerThinking || {})[providerId] || {};
       setThinkingMode(thinkingCfg.mode || "auto");
@@ -431,6 +440,34 @@ export default function ProviderDetailPage() {
   const handleThinkingModeChange = (mode) => {
     setThinkingMode(mode);
     saveThinkingConfig(mode);
+  };
+
+  const saveProviderHeaders = async () => {
+    setSavingProviderHeaders(true);
+    setProviderHeadersMessage(null);
+    try {
+      const settingsRes = await fetch("/api/settings", { cache: "no-store" });
+      const settingsData = settingsRes.ok ? await settingsRes.json() : {};
+      const current = settingsData.providerUpstreamHeaders || {};
+      const headers = headerRowsToRecord(activeHeaderRows(providerUpstreamHeaders));
+      const updated = { ...current };
+      if (Object.keys(headers).length > 0) updated[providerId] = headers;
+      else delete updated[providerId];
+
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ providerUpstreamHeaders: updated }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to save provider headers");
+      setProviderUpstreamHeaders(headerRecordToRows((data.providerUpstreamHeaders || {})[providerId]));
+      setProviderHeadersMessage({ type: "success", text: "Upstream headers saved for all Codex connections." });
+    } catch (error) {
+      setProviderHeadersMessage({ type: "error", text: error.message });
+    } finally {
+      setSavingProviderHeaders(false);
+    }
   };
 
   const saveAutoPing = async (next) => {
@@ -1415,6 +1452,34 @@ export default function ProviderDetailPage() {
               </Button>
             </div>
           </div>
+        </Card>
+      )}
+
+      {providerId === "codex" && (
+        <Card>
+          <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h2 className="text-lg font-semibold">Codex Upstream Identity</h2>
+              <p className="text-xs text-text-muted">
+                These headers are applied to every request from 9Router to the Codex upstream, regardless of which Codex connection or combo member is selected.
+              </p>
+            </div>
+            <Button size="sm" icon="save" onClick={saveProviderHeaders} loading={savingProviderHeaders}>
+              Save Headers
+            </Button>
+          </div>
+          <HeaderRowsEditor
+            title="Upstream Codex Headers"
+            description="Paste the captured Codex CLI fingerprint here. Authorization, ChatGPT account binding, and dynamic session headers remain managed by 9Router."
+            rows={providerUpstreamHeaders}
+            onChange={setProviderUpstreamHeaders}
+            valuePlaceholder="Captured Codex CLI header value"
+          />
+          {providerHeadersMessage && (
+            <p className={`mt-2 text-xs ${providerHeadersMessage.type === "success" ? "text-green-600" : "text-red-500"}`}>
+              {providerHeadersMessage.text}
+            </p>
+          )}
         </Card>
       )}
 

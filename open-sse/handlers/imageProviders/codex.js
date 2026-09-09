@@ -2,11 +2,16 @@
 import { randomUUID } from "node:crypto";
 import { nowSec } from "./_base.js";
 import { PROVIDERS } from "../../config/providers.js";
+import {
+  applyCodexSessionHeaders,
+  CODEX_CLI_BETA_FEATURES,
+  CODEX_CLI_ORIGINATOR,
+  CODEX_CLI_USER_AGENT,
+  mergeCodexClientHeaders,
+  mergeCodexUpstreamHeaders,
+} from "../../utils/codexClientHeaders.js";
 
 const CODEX_RESPONSES_URL = PROVIDERS["codex"].baseUrl;
-const CODEX_USER_AGENT = "codex_cli_rs/0.136.0";
-const CODEX_VERSION = "0.136.0";
-const CODEX_ORIGINATOR = "codex_cli_rs";
 const CODEX_MODEL_SUFFIX = "-image";
 const CODEX_REF_DETAIL = "high";
 
@@ -149,17 +154,20 @@ export default {
   buildUrl: () => CODEX_RESPONSES_URL,
   buildHeaders: (creds) => {
     const accountId = creds?.providerSpecificData?.chatgptAccountId || decodeAccountId(creds?.idToken);
-    return {
-      "accept": "text/event-stream, application/json",
+    const sessionId = randomUUID();
+    const headers = {
+      "accept": "text/event-stream",
       "authorization": `Bearer ${creds?.accessToken || ""}`,
       "chatgpt-account-id": accountId || "",
       "content-type": "application/json",
-      "originator": CODEX_ORIGINATOR,
-      "session_id": randomUUID(),
-      "user-agent": CODEX_USER_AGENT,
-      "version": CODEX_VERSION,
-      "x-client-request-id": randomUUID(),
+      "originator": CODEX_CLI_ORIGINATOR,
+      "user-agent": CODEX_CLI_USER_AGENT,
+      "x-codex-beta-features": CODEX_CLI_BETA_FEATURES,
     };
+    applyCodexSessionHeaders(headers, sessionId);
+    mergeCodexClientHeaders(headers, creds?.rawHeaders);
+    mergeCodexUpstreamHeaders(headers, creds?.upstreamHeaders);
+    return headers;
   },
   buildBody: (model, body) => {
     const refs = [];

@@ -118,7 +118,7 @@ vi.mock("@/lib/usageDb.js", () => ({
   saveRequestDetail: vi.fn(() => Promise.resolve()),
 }));
 
-function makeOptions(body) {
+function makeOptions(body, accept = "application/json") {
   return {
     body,
     modelInfo: { provider: "minimax-cn", model: "MiniMax-M3" },
@@ -126,7 +126,7 @@ function makeOptions(body) {
     clientRawRequest: {
       endpoint: "/v1/chat/completions",
       body,
-      headers: { accept: "application/json" },
+      headers: { accept },
     },
     connectionId: "test-connection",
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -185,5 +185,22 @@ describe("MiniMax-M3 multi-transport routing", () => {
     expect(requestBody._translatedTo).toBe("openai");
     expect(requestBody).not.toHaveProperty("system");
     expect(executeMock.mock.calls[0][0].credentials.runtimeTransport.format).toBe("openai");
+  });
+
+  it("defaults an omitted stream flag to JSON for OpenAI-compatible clients", async () => {
+    const body = {
+      model: "minimax-cn/MiniMax-M3",
+      messages: [{ role: "user", content: "hello" }],
+    };
+
+    const { handleChatCore } = await import("../../open-sse/handlers/chatCore.js");
+    await handleChatCore(makeOptions(body, "text/event-stream"));
+
+    // LiteLLM's fake-stream path removes `stream` and expects a JSON body.
+    // The router must not reinterpret an omitted flag as SSE merely because
+    // the request is handled by an OpenAI-compatible provider.
+    expect(executeMock).toHaveBeenCalledTimes(1);
+    expect(executeMock.mock.calls[0][0].stream).toBe(false);
+    expect(handleNonStreamingResponseMock).toHaveBeenCalledTimes(1);
   });
 });

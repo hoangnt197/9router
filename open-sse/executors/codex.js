@@ -12,6 +12,16 @@ import { getThinkingLevels } from "../providers/thinkingLevels.js";
 import { DEFAULT_RETRY_CONFIG, HTTP_STATUS, resolveRetryEntry } from "../config/runtimeConfig.js";
 import { dbg } from "../utils/debugLog.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
+import {
+  applyCodexSessionHeaders,
+  CODEX_CLI_ORIGINATOR,
+  mergeCodexClientHeaders,
+  mergeCodexUpstreamHeaders,
+} from "../utils/codexClientHeaders.js";
+import {
+  createCodexTurnMetadata,
+  mergeCodexTurnClientMetadata,
+} from "../utils/codexTurnMetadata.js";
 
 // SSE error patterns inside 200-OK bodies. Some retry same account first; capacity rotates accounts.
 const CODEX_SSE_RETRY_PATTERNS = ["server_is_overloaded", "service_unavailable_error"];
@@ -193,6 +203,7 @@ export class CodexExecutor extends BaseExecutor {
   constructor() {
     super("codex", PROVIDERS.codex);
     this._currentSessionId = null;
+    this._currentTurnMetadata = null;
   }
 
   /**
@@ -201,9 +212,21 @@ export class CodexExecutor extends BaseExecutor {
    */
   buildHeaders(credentials, stream = true) {
     const headers = super.buildHeaders(credentials, stream);
-    headers["session_id"] = this._currentSessionId || credentials?.connectionId || "default";
-    // Identify client type to Codex backend (matches official codex CLI)
-    if (!headers["originator"]) headers["originator"] = "codex_cli_rs";
+    const sessionId = this._currentSessionId || credentials?.connectionId || "default";
+    applyCodexSessionHeaders(headers, sessionId);
+    if (this._currentTurnMetadata) {
+      headers["x-codex-turn-metadata"] = this._currentTurnMetadata;
+    }
+    delete headers["session_id"];
+    if (!headers["originator"]) headers["originator"] = CODEX_CLI_ORIGINATOR;
+    // Native Codex CLI requests carry dynamic turn metadata plus user-defined
+    // http_headers/env_http_headers. Forward them while keeping upstream auth
+    // and account binding owned by the selected 9Router connection.
+    mergeCodexClientHeaders(headers, credentials?.rawHeaders);
+    // Connection-level upstream headers apply for every caller, including
+    // combo requests made by non-Codex clients. This is the configured Codex
+    // CLI fingerprint; authentication and dynamic session headers stay managed.
+    mergeCodexUpstreamHeaders(headers, credentials?.upstreamHeaders);
     // Account/workspace binding header — required when multiple Codex accounts
     // are configured. OAuth import stores ChatGPT account ID as chatgptAccountId;
     // older/custom rows may use workspaceId/accountId. Prefer explicit workspaceId
@@ -395,6 +418,8 @@ export class CodexExecutor extends BaseExecutor {
     delete body._compact;
     // Resolve conversation-stable session_id (priority: body → assistant-text → workspace → machine)
     this._currentSessionId = resolveCacheSessionId(body, credentials);
+    this._currentTurnMetadata = createCodexTurnMetadata(this._currentSessionId, credentials?.rawHeaders);
+    mergeCodexTurnClientMetadata(body, this._currentTurnMetadata);
     // Convert string input to array format (Codex API requires input as array)
     const normalized = normalizeResponsesInput(body.input);
     if (normalized) body.input = normalized;

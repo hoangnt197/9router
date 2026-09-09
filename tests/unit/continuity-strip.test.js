@@ -64,6 +64,7 @@ describe("stripContinuityFields (outbound boundary)", () => {
 
   it("end-to-end: Responses multi-turn translation stripped before dispatch", () => {
     const translated = openaiResponsesToOpenAIRequest("x", makeResponsesBody(), false, {});
+    expect(translated.stream).toBe(false);
     // The translator stashes the blob for internal round-trip symmetry...
     const assistantBefore = translated.messages.find((m) => m.role === "assistant");
     expect(assistantBefore.encrypted_content).toBe("B".repeat(5000));

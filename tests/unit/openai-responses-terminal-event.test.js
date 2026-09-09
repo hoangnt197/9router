@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import { FORMATS } from "../../open-sse/translator/formats.js";
 import { createSSETransformStreamWithLogger } from "../../open-sse/utils/stream.js";
+import { buildTransformStream } from "../../open-sse/handlers/chatCore/streamingHandler.js";
 
-async function runTransform(input) {
+async function runTransform(input, transform = null) {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     start(controller) {
@@ -13,7 +14,7 @@ async function runTransform(input) {
   });
 
   const output = stream.pipeThrough(
-    createSSETransformStreamWithLogger(
+    transform || createSSETransformStreamWithLogger(
       FORMATS.OPENAI_RESPONSES,
       FORMATS.OPENAI_RESPONSES,
       "codex",
@@ -92,5 +93,25 @@ describe("OpenAI Responses streaming termination", () => {
     expect(output.indexOf("event: response.failed")).toBeLessThan(output.indexOf("data: [DONE]"));
     expect(output.match(/data: \[DONE\]/g)).toHaveLength(1);
     expect(output).not.toContain("data: null");
+  });
+
+  it("keeps native Responses events for Droid/Codex clients", async () => {
+    const transform = buildTransformStream({
+      provider: "codex",
+      sourceFormat: FORMATS.OPENAI_RESPONSES,
+      targetFormat: FORMATS.OPENAI_RESPONSES,
+      userAgent: "droid/1.0",
+      model: "gpt-5.5",
+      clientRequestedModel: "gpt-5.5",
+    });
+    const output = await runTransform([
+      `event: response.completed`,
+      `data: ${JSON.stringify({ type: "response.completed", response: { id: "resp_test", status: "completed" } })}`,
+      "",
+    ].join("\n"), transform);
+
+    expect(output).toContain("event: response.completed");
+    expect(output).toContain('"type":"response.completed"');
+    expect(output).toContain("data: [DONE]");
   });
 });

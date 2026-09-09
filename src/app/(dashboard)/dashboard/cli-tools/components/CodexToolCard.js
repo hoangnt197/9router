@@ -2,11 +2,17 @@
 
 import { useState, useEffect } from "react";
 import { Card, Button, ModelSelectModal, ManualConfigModal } from "@/shared/components";
+import HeaderRowsEditor, {
+  activeHeaderRows,
+  headerRecordToRows,
+} from "@/shared/components/HeaderRowsEditor";
 import Image from "next/image";
 import BaseUrlSelect from "./BaseUrlSelect";
 import ApiKeySelect from "./ApiKeySelect";
 import { matchKnownEndpoint } from "./cliEndpointMatch";
 import { rememberEndpoint } from "./cliEndpointPresets";
+
+const tomlString = (value) => JSON.stringify(String(value));
 
 export default function CodexToolCard({ tool, isExpanded, onToggle, baseUrl, apiKeys, activeProviders, cloudEnabled, initialStatus, tunnelEnabled, tunnelPublicUrl, tailscaleEnabled, tailscaleUrl }) {
   const [codexStatus, setCodexStatus] = useState(initialStatus || null);
@@ -23,6 +29,8 @@ export default function CodexToolCard({ tool, isExpanded, onToggle, baseUrl, api
   const [modelAliases, setModelAliases] = useState({});
   const [showManualConfigModal, setShowManualConfigModal] = useState(false);
   const [customBaseUrl, setCustomBaseUrl] = useState("");
+  const [httpHeaders, setHttpHeaders] = useState([]);
+  const [envHttpHeaders, setEnvHttpHeaders] = useState([]);
 
   useEffect(() => {
     if (apiKeys?.length > 0 && !selectedApiKey) {
@@ -51,24 +59,18 @@ export default function CodexToolCard({ tool, isExpanded, onToggle, baseUrl, api
     }
   };
 
-  // Parse model and subagent settings from config content
+  // Load structured settings returned by the server so saved headers remain visible.
   useEffect(() => {
-    if (codexStatus?.config) {
-      const modelMatch = codexStatus.config.match(/^model\s*=\s*"([^"]+)"/m);
-      if (modelMatch) setSelectedModel(modelMatch[1]);
-
-      // Parse subagent settings
-      const subagentModelMatch = codexStatus.config.match(/^default_subagent_model\s*=\s*"([^"]+)"/m);
-      if (subagentModelMatch) setSubagentModel(subagentModelMatch[1]);
-    }
+    const settings = codexStatus?.settings;
+    if (!settings) return;
+    setSelectedModel(settings.model || "");
+    setSubagentModel(settings.subagentModel || "");
+    setCustomBaseUrl(settings.baseUrl || "");
+    setHttpHeaders(headerRecordToRows(settings.httpHeaders));
+    setEnvHttpHeaders(headerRecordToRows(settings.envHttpHeaders));
   }, [codexStatus]);
 
-  const getCurrentBaseUrl = () => {
-    const parsed = codexStatus?.config?.match(/base_url\s*=\s*"([^"]+)"/);
-    return parsed ? parsed[1] : "";
-  };
-
-  const currentBaseUrl = getCurrentBaseUrl();
+  const currentBaseUrl = codexStatus?.settings?.baseUrl || "";
 
   const getConfigStatus = () => {
     if (!codexStatus?.installed) return null;
@@ -115,7 +117,9 @@ export default function CodexToolCard({ tool, isExpanded, onToggle, baseUrl, api
           baseUrl: getEffectiveBaseUrl(),
           apiKey: keyToUse,
           model: selectedModel,
-          subagentModel: subagentModel || selectedModel
+          subagentModel: subagentModel || selectedModel,
+          httpHeaders: activeHeaderRows(httpHeaders),
+          envHttpHeaders: activeHeaderRows(envHttpHeaders),
         }),
       });
       const data = await res.json();
@@ -144,6 +148,9 @@ export default function CodexToolCard({ tool, isExpanded, onToggle, baseUrl, api
         setMessage({ type: "success", text: "Settings reset successfully!" });
         setSelectedModel("");
         setSubagentModel("");
+        setCustomBaseUrl("");
+        setHttpHeaders([]);
+        setEnvHttpHeaders([]);
         checkCodexStatus();
       } else {
         setMessage({ type: "error", text: data.error || "Failed to reset settings" });
@@ -170,6 +177,10 @@ export default function CodexToolCard({ tool, isExpanded, onToggle, baseUrl, api
       : (!cloudEnabled ? "sk_9router" : "<API_KEY_FROM_DASHBOARD>");
 
     const effectiveSubagentModel = subagentModel || selectedModel;
+    const staticHeaderLines = activeHeaderRows(httpHeaders)
+      .map(({ name, value }) => `${tomlString(name.trim())} = ${tomlString(value.trim())}`);
+    const envHeaderLines = activeHeaderRows(envHttpHeaders)
+      .map(({ name, value }) => `${tomlString(name.trim())} = ${tomlString(value.trim())}`);
 
     const configContent = `# 9Router Configuration for Codex CLI
 model = "${selectedModel}"
@@ -182,6 +193,9 @@ wire_api = "responses"
 
 [model_providers.9router.http_headers]
 Authorization = "Bearer ${keyToUse}"
+${staticHeaderLines.join("\n")}
+
+${envHeaderLines.length ? `[model_providers.9router.env_http_headers]\n${envHeaderLines.join("\n")}\n` : ""}
 
 [agents]
 default_subagent_model = "${effectiveSubagentModel}"
@@ -346,6 +360,23 @@ default_subagent_model = "${effectiveSubagentModel}"
                     Select Model
                   </button>
                 </div>
+
+                <HeaderRowsEditor
+                  title="Client → 9Router Headers"
+                  description="Optional headers sent by this Codex CLI to 9Router. Upstream provider headers are configured on the Codex connection."
+                  rows={httpHeaders}
+                  onChange={setHttpHeaders}
+                  valuePlaceholder="Captured header value"
+                />
+
+                <HeaderRowsEditor
+                  title="Client → 9Router Environment Headers"
+                  description="Map a client request header to an environment variable available to this Codex CLI."
+                  rows={envHttpHeaders}
+                  onChange={setEnvHttpHeaders}
+                  valuePlaceholder="ENV_VARIABLE_NAME"
+                  environment
+                />
               </div>
 
               {message && (

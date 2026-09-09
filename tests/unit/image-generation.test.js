@@ -316,7 +316,7 @@ describe("handleImageGenerationCore", () => {
     expect(responseBody.data[0].b64_json).toBeTruthy();
   });
 
-  it("generates image with Codex gpt-5.5-image using current Codex version header", async () => {
+  it("generates image with Codex gpt-5.5-image using current Codex CLI headers", async () => {
     global.fetch.mockResolvedValueOnce(
       new Response(
         [
@@ -339,6 +339,13 @@ describe("handleImageGenerationCore", () => {
       credentials: {
         accessToken: "codex-token",
         providerSpecificData: { chatgptAccountId: "account-123" },
+        rawHeaders: {
+          authorization: "Bearer router-key",
+          "user-agent": "Codex Desktop/0.153.4 custom-terminal",
+          originator: "captured-image-originator",
+          "x-codex-turn-metadata": "{\"turn_id\":\"image-turn\"}",
+          "x-custom-image": "custom-value",
+        },
       },
       log: null,
     });
@@ -351,7 +358,14 @@ describe("handleImageGenerationCore", () => {
         headers: expect.objectContaining({
           authorization: "Bearer codex-token",
           "chatgpt-account-id": "account-123",
-          version: "0.136.0",
+          originator: "captured-image-originator",
+          "user-agent": "Codex Desktop/0.153.4 custom-terminal",
+          "session-id": expect.any(String),
+          "thread-id": expect.any(String),
+          "x-client-request-id": expect.any(String),
+          "x-codex-beta-features": "remote_compaction_v2",
+          "x-codex-turn-metadata": "{\"turn_id\":\"image-turn\"}",
+          "x-custom-image": "custom-value",
         }),
       })
     );

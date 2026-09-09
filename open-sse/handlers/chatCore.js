@@ -30,7 +30,8 @@ import { stripUnsupportedModalities } from "../translator/concerns/modality.js";
 import { prefetchRemoteImages } from "../translator/concerns/prefetch.js";
 import { defaultClaudeToolType } from "../translator/concerns/toolCall.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
-import { preserveComboModelMarker } from "../utils/reasoningUsagePolicy.js";
+import { getComboHeadroomMinInputTokens, isComboModelRequest, preserveComboModelMarker } from "../utils/reasoningUsagePolicy.js";
+import { estimateInputTokens } from "../utils/inputTokenEstimator.js";
 
 /**
  * Core chat handler - shared between SSE and Worker
@@ -116,9 +117,27 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     }
   }
 
-  const clientRequestedStreaming = body.stream === true || sourceFormat === FORMATS.ANTIGRAVITY || sourceFormat === FORMATS.GEMINI || sourceFormat === FORMATS.GEMINI_CLI;
+  // OpenAI wire formats default to a JSON response when `stream` is omitted.
+  // Keep the body flag authoritative for these endpoints: LiteLLM's fake-stream
+  // path intentionally removes `stream` before calling us and then parses the
+  // response as JSON, so an Accept header must not silently turn it into SSE.
+  // Legacy non-OpenAI formats may still infer streaming from an explicit SSE
+  // Accept header when their clients omit the body flag.
+  const rawHeaders = clientRawRequest?.headers;
+  const acceptHeader = typeof rawHeaders?.get === "function"
+    ? (rawHeaders.get("accept") || "")
+    : Object.entries(rawHeaders || {}).find(([name]) => name.toLowerCase() === "accept")?.[1] || "";
+  const normalizedAccept = String(acceptHeader).toLowerCase();
+  const clientPrefersJson = normalizedAccept.includes("application/json");
+  const clientPrefersSSE = normalizedAccept.includes("text/event-stream");
+  const isOpenAIWireFormat = sourceFormat === FORMATS.OPENAI || sourceFormat === FORMATS.OPENAI_RESPONSES;
+  const clientRequestedStreaming = body.stream === true
+    || (body.stream === undefined && !isOpenAIWireFormat && clientPrefersSSE && !clientPrefersJson)
+    || sourceFormat === FORMATS.ANTIGRAVITY
+    || sourceFormat === FORMATS.GEMINI
+    || sourceFormat === FORMATS.GEMINI_CLI;
   const providerRequiresStreaming = PROVIDERS[provider]?.forceStream === true;
-  let stream = providerRequiresStreaming ? true : (body.stream !== false);
+  let stream = providerRequiresStreaming ? true : clientRequestedStreaming;
 
   // Image generation models require non-streaming (Google v1internal:generateContent)
   const modelType = getModelType(alias, model);
@@ -132,15 +151,6 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   // Only force non-streaming when client didn't explicitly request it.
   const detectedTool = detectClientTool(clientRawRequest?.headers || {}, body);
   if (detectedTool === "deepseek-tui" && body.stream !== true) stream = false;
-
-  // Check client Accept header preference for non-streaming requests
-  // This fixes AI SDK compatibility where clients send Accept: application/json
-  const acceptHeader = clientRawRequest?.headers?.accept || "";
-  const clientPrefersJson = acceptHeader.includes("application/json");
-  const clientPrefersSSE = acceptHeader.includes("text/event-stream");
-  if (clientPrefersJson && !clientPrefersSSE && body.stream !== true && !providerRequiresStreaming) {
-    stream = false;
-  }
 
   const reqLogger = await createRequestLogger(sourceFormat, targetFormat, model);
   if (clientRawRequest) reqLogger.logClientRawRequest(clientRawRequest.endpoint, clientRawRequest.body, clientRawRequest.headers);
@@ -258,7 +268,28 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
   // Headroom: optional external proxy compression; fail open if proxy is absent.
   const headroomDiagnostics = {};
-  const headroomStats = await compressWithHeadroom(translatedBody, { enabled: tokenSaverEnabled && headroomEnabled, url: headroomUrl, model: upstreamModel, format: finalFormat, compressUserMessages: headroomCompressUserMessages, timeoutMs: headroomTimeoutMs, diagnostics: headroomDiagnostics });
+  const comboRequest = isComboModelRequest(body);
+  const comboHeadroomThreshold = getComboHeadroomMinInputTokens(body);
+  const headroomRequestEnabled = tokenSaverEnabled && headroomEnabled;
+  let headroomEligible = true;
+  if (comboRequest && headroomRequestEnabled) {
+    // A combo member opts into Headroom explicitly. This keeps fallback
+    // members independent: each one starts from the original body and applies
+    // its own threshold before dispatch.
+    if (!comboHeadroomThreshold) {
+      headroomEligible = false;
+      headroomDiagnostics.reason = "combo threshold not configured";
+    } else {
+      const estimatedInputTokens = estimateInputTokens(translatedBody);
+      if (estimatedInputTokens <= comboHeadroomThreshold) {
+        headroomEligible = false;
+        headroomDiagnostics.reason = `input ${estimatedInputTokens} ≤ threshold ${comboHeadroomThreshold}`;
+      }
+    }
+  }
+  const headroomStats = headroomEligible
+    ? await compressWithHeadroom(translatedBody, { enabled: headroomRequestEnabled, url: headroomUrl, model: upstreamModel, format: finalFormat, compressUserMessages: headroomCompressUserMessages, timeoutMs: headroomTimeoutMs, diagnostics: headroomDiagnostics })
+    : null;
   const headroomLine = formatHeadroomLog(headroomStats);
   const headroomSizeLine = formatHeadroomSizeLog(headroomDiagnostics);
   if (headroomLine) {
@@ -266,7 +297,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     if (isHeadroomPhantomSavings(headroomStats, headroomDiagnostics)) {
       log?.warn?.("HEADROOM", `reported token delta, but outbound JSON shrank <5%; provider may bill near-original payload | ${formatHeadroomSizeLog(headroomDiagnostics)}`);
     }
-  } else if (tokenSaverEnabled && headroomEnabled) log?.warn?.("HEADROOM", `skipped: ${headroomDiagnostics.reason || "compression unavailable"}${headroomDiagnostics.endpoint ? ` (${headroomDiagnostics.endpoint})` : ""}`);
+  } else if (tokenSaverEnabled && headroomEnabled && (!comboRequest || headroomEligible)) log?.warn?.("HEADROOM", `skipped: ${headroomDiagnostics.reason || "compression unavailable"}${headroomDiagnostics.endpoint ? ` (${headroomDiagnostics.endpoint})` : ""}`);
 
   // Token-saver flags accumulator for the single "⚙" log line below.
   const xf = [];
