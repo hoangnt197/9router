@@ -151,6 +151,14 @@ export function createSSEStream(options = {}) {
             try {
               const parsed = JSON.parse(trimmed.slice(5).trim());
 
+              // The selected combo member can carry an internal provider prefix
+              // and effort suffix. Never expose that routing implementation
+              // detail in an SSE chunk (the final usage policy below handles
+              // response-shaped payloads and usage accounting separately).
+              if (responsePolicy.publicModel && typeof parsed.model === "string") {
+                parsed.model = responsePolicy.publicModel;
+              }
+
               const idFixed = fixInvalidId(parsed);
 
               // Ensure OpenAI-required fields are present on streaming chunks (Letta compat)
@@ -212,6 +220,10 @@ export function createSSEStream(options = {}) {
               responsesTerminal = isOpenAIResponsesTerminalEvent(currentOpenAIResponsesEvent, parsed);
 
               const isFinishChunk = parsed.choices?.[0]?.finish_reason;
+              // Apply the policy before serializing the terminal chunk, so the
+              // client receives the adjusted reasoning usage rather than only
+              // the internal usage accumulator seeing it.
+              if (isFinishChunk) applyResponsePolicy(parsed, responsePolicy);
               if (isFinishChunk && !hasValidUsage(parsed.usage)) {
                 const estimated = estimateUsage(body, totalContentLength, FORMATS.OPENAI);
                 parsed.usage = filterUsageForFormat(estimated, FORMATS.OPENAI);
@@ -228,7 +240,6 @@ export function createSSEStream(options = {}) {
                 injectedUsage = true;
               }
 
-              applyResponsePolicy(parsed, responsePolicy);
               if (isFinishChunk) {
                 // Keep usage recorded to the report unscaled; only mutate the
                 // response sent to the client after retaining the raw value.

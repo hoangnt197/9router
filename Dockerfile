@@ -1,27 +1,49 @@
 # syntax=docker/dockerfile:1.7
 ARG NODE_IMAGE=node:22-alpine
+ARG ALPINE_MIRROR=dl-cdn.alpinelinux.org
+ARG NPM_REGISTRY=https://registry.npmjs.org/
+ARG APP_VERSION=unknown
+
 FROM ${NODE_IMAGE} AS base
+ARG ALPINE_MIRROR
 WORKDIR /app
-# CN mirror for apk (used by builder and runner stages)
-RUN sed -i 's|dl-cdn.alpinelinux.org|mirrors.aliyun.com|g' /etc/apk/repositories
+
+# Use the official Alpine mirror by default. A repository variable/build arg can
+# override it for environments that require a regional mirror.
+RUN if [ "$ALPINE_MIRROR" != "dl-cdn.alpinelinux.org" ]; then \
+      sed -i "s|dl-cdn.alpinelinux.org|${ALPINE_MIRROR}|g" /etc/apk/repositories; \
+    fi
 
 FROM base AS builder
+ARG NPM_REGISTRY
 
-RUN apk --no-cache upgrade && apk --no-cache add python3 make g++ linux-headers
+RUN apk add --no-cache python3 make g++ linux-headers
 
 COPY package.json ./
-# Keep the image build compatible with Docker installations that do not have
-# BuildKit enabled (the cache mount is only an optimisation).
-RUN npm install
+RUN --mount=type=cache,target=/root/.npm \
+    npm install \
+      --registry="${NPM_REGISTRY}" \
+      --fetch-retries=5 \
+      --fetch-retry-factor=2 \
+      --fetch-retry-mintimeout=10000 \
+      --fetch-retry-maxtimeout=120000 \
+      --fetch-timeout=300000
 
 COPY . ./
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
 FROM ${NODE_IMAGE} AS runner
+ARG ALPINE_MIRROR
+ARG APP_VERSION
 WORKDIR /app
 
-LABEL org.opencontainers.image.title="9router"
+RUN if [ "$ALPINE_MIRROR" != "dl-cdn.alpinelinux.org" ]; then \
+      sed -i "s|dl-cdn.alpinelinux.org|${ALPINE_MIRROR}|g" /etc/apk/repositories; \
+    fi
+
+LABEL org.opencontainers.image.title="9router" \
+      org.opencontainers.image.version="${APP_VERSION}"
 
 ENV NODE_ENV=production
 ENV PORT=20128
@@ -40,28 +62,9 @@ COPY --from=builder /app/src/mitm ./src/mitm
 COPY --from=builder /app/node_modules/node-forge ./node_modules/node-forge
 # Ensure `next` is available at runtime in case tracing did not include it.
 COPY --from=builder /app/node_modules/next ./node_modules/next
-# Repository IDs are generated at runtime; keep uuid available even when the
-# standalone tracer does not see the dynamic repository import path.
-COPY --from=builder /app/node_modules/uuid ./node_modules/uuid
-# Database adapters are selected dynamically at runtime, so Next's standalone
-# tracing can omit their packages. Keep the complete runtime dependency trees
-# for Redis cluster state and the PostgreSQL adapter in the production image.
-COPY --from=builder /app/node_modules/redis ./node_modules/redis
-COPY --from=builder /app/node_modules/@redis ./node_modules/@redis
-COPY --from=builder /app/node_modules/cluster-key-slot ./node_modules/cluster-key-slot
-COPY --from=builder /app/node_modules/pg ./node_modules/pg
-COPY --from=builder /app/node_modules/pg-cloudflare ./node_modules/pg-cloudflare
-COPY --from=builder /app/node_modules/pg-connection-string ./node_modules/pg-connection-string
-COPY --from=builder /app/node_modules/pg-int8 ./node_modules/pg-int8
-COPY --from=builder /app/node_modules/pg-pool ./node_modules/pg-pool
-COPY --from=builder /app/node_modules/pg-protocol ./node_modules/pg-protocol
-COPY --from=builder /app/node_modules/pg-types ./node_modules/pg-types
-COPY --from=builder /app/node_modules/pgpass ./node_modules/pgpass
-COPY --from=builder /app/node_modules/postgres-array ./node_modules/postgres-array
-COPY --from=builder /app/node_modules/postgres-bytea ./node_modules/postgres-bytea
-COPY --from=builder /app/node_modules/postgres-date ./node_modules/postgres-date
-COPY --from=builder /app/node_modules/postgres-interval ./node_modules/postgres-interval
-COPY --from=builder /app/node_modules/split2 ./node_modules/split2
+# sql.js loads dist/sql-wasm.wasm by path at runtime; tracing only follows JS imports,
+# so the last-resort DB driver would abort with ENOENT on the missing binary.
+COPY --from=builder /app/node_modules/sql.js ./node_modules/sql.js
 # node-machine-id is createRequire-loaded at runtime; tracing omits it.
 COPY --from=builder /app/node_modules/node-machine-id ./node_modules/node-machine-id
 
@@ -69,8 +72,9 @@ RUN mkdir -p /app/data && chown -R node:node /app && \
   mkdir -p /app/data-home && chown node:node /app/data-home && \
   ln -sf /app/data-home /root/.9router 2>/dev/null || true
 
-# Fix permissions at runtime (handles mounted volumes)
-RUN apk --no-cache upgrade && apk --no-cache add su-exec && \
+# Avoid a full distribution upgrade in the runtime image. It makes builds less
+# reproducible and is unrelated to installing the runtime entrypoint helper.
+RUN apk add --no-cache su-exec && \
   printf '#!/bin/sh\nchown -R node:node /app/data /app/data-home 2>/dev/null\nexec su-exec node "$@"\n' > /entrypoint.sh && \
   chmod +x /entrypoint.sh
 
