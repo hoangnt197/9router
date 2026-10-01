@@ -488,20 +488,25 @@ export const PATTERN_CAPABILITIES = [
  */
 export function aggregateComboCapabilities(comboModels, comboLookup = null, resolveCaps = null, _depth = 0) {
   if (!comboModels?.length || _depth > 6) return null;
-  const allCaps = comboModels.map((fullId) => {
+  const allCaps = comboModels.flatMap((entry) => {
+    // Combo members may carry routing metadata (price, token limits, schedule)
+    // as an object. Capabilities are resolved from its model identifier.
+    const fullId = typeof entry === "object" && entry !== null ? entry.model : entry;
+    if (typeof fullId !== "string" || !fullId) return [];
     // Nested combo: bare name (no slash) that exists in the lookup — recurse
     if (!fullId.includes("/") && comboLookup?.[fullId]) {
-      return aggregateComboCapabilities(comboLookup[fullId], comboLookup, resolveCaps, _depth + 1)
+      return [aggregateComboCapabilities(comboLookup[fullId], comboLookup, resolveCaps, _depth + 1)
           ?? resolveCaps?.(fullId)
-          ?? getCapabilitiesForModel(null, fullId);
+          ?? getCapabilitiesForModel(null, fullId)];
     }
     const slash = fullId.indexOf("/");
     const provider = slash === -1 ? null : fullId.slice(0, slash);
     const model = slash === -1 ? fullId : fullId.slice(slash + 1);
     const local = getCapabilitiesForModel(provider, model);
     const override = resolveCaps?.(fullId);
-    return override ? { ...local, ...override } : local;
+    return [override ? { ...local, ...override } : local];
   });
+  if (!allCaps.length) return null;
   const first = allCaps[0];
   return {
     vision:      allCaps.some((c) => c.vision),

@@ -51,10 +51,12 @@ const ALIAS_TO_PROVIDER_ID = {
 };
 
 function comboSeatCapabilities(seat) {
-  const slash = seat.indexOf("/");
+  const fullId = typeof seat === "object" && seat !== null ? seat.model : seat;
+  if (typeof fullId !== "string") return null;
+  const slash = fullId.indexOf("/");
   if (slash <= 0) return null;
-  const alias = seat.slice(0, slash);
-  return getCapabilitiesForModel(ALIAS_TO_PROVIDER_ID[alias] || alias, seat.slice(slash + 1));
+  const alias = fullId.slice(0, slash);
+  return getCapabilitiesForModel(ALIAS_TO_PROVIDER_ID[alias] || alias, fullId.slice(slash + 1));
 }
 
 // Per-provider live model resolvers. Each receives a connection record and
@@ -286,7 +288,8 @@ function comboSeatLimits(combo, combosByName, visiting = new Set()) {
   let contextWindow = Infinity;
   let maxOutput = Infinity;
   try {
-    for (const seat of Array.isArray(combo?.models) ? combo.models : []) {
+    for (const entry of Array.isArray(combo?.models) ? combo.models : []) {
+      const seat = typeof entry === "object" && entry !== null ? entry.model : entry;
       if (typeof seat !== "string") continue;
       const slash = seat.indexOf("/");
       if (slash <= 0) {
