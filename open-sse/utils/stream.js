@@ -154,9 +154,9 @@ export function createSSEStream(options = {}) {
           let injectedUsage = false;
           let responsesTerminal = false;
 
-          if (trimmed.startsWith("data:") && trimmed.slice(5).trim() !== "[DONE]") {
+          if ((trimmed.startsWith("data:") || trimmed.startsWith("{")) && (trimmed.startsWith("{") || trimmed.slice(5).trim() !== "[DONE]")) {
             try {
-              const parsed = JSON.parse(trimmed.slice(5).trim());
+              const parsed = JSON.parse(trimmed.startsWith("data:") ? trimmed.slice(5).trim() : trimmed);
 
               // This node owns usage accounting. Discard any upstream value
               // immediately, including providers that send it before their
@@ -278,7 +278,9 @@ export function createSSEStream(options = {}) {
           }
 
           if (!injectedUsage) {
-            if (line.startsWith("data:") && !line.startsWith("data: ")) {
+            if (line.trim().startsWith("{")) {
+              output = "data: " + line.trim() + "\n";
+            } else if (line.startsWith("data:") && !line.startsWith("data: ")) {
               output = "data: " + line.slice(5) + "\n";
             } else {
               output = line + "\n";

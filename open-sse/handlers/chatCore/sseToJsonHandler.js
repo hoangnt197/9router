@@ -29,7 +29,7 @@ function outputLengthFromResponses(output) {
 function isTerminalSSEBlock(block) {
   const event = block.match(/^event:\s*([^\r\n]+)/m)?.[1]?.trim();
   if (["response.completed", "response.done", "response.failed", "response.incomplete"].includes(event)) return true;
-  const data = block.match(/^data:\s*(.+)$/m)?.[1]?.trim();
+  const data = block.match(/^data:\s*(.+)$/m)?.[1]?.trim() || block.trim();
   if (!data || data === "[DONE]") return data === "[DONE]";
   try { return Boolean(JSON.parse(data)?.choices?.some((choice) => choice?.finish_reason)); } catch { return false; }
 }
@@ -51,7 +51,8 @@ async function readSSEUntilTerminal(stream) {
       pending += text;
       const blocks = pending.split(/\n\n/);
       pending = blocks.pop() || "";
-      if (blocks.some(isTerminalSSEBlock)) {
+      const hasRawJsonTerminal = raw.split(/\r?\n/).some((line) => line.trim().startsWith("{") && isTerminalSSEBlock(line));
+      if (blocks.some(isTerminalSSEBlock) || hasRawJsonTerminal) {
         await reader.cancel("early_stream_cutoff");
         break;
       }
@@ -158,8 +159,8 @@ export function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
 
   for (const line of String(rawSSE || "").split("\n")) {
     const trimmed = line.trim();
-    if (!trimmed.startsWith("data:")) continue;
-    const payload = trimmed.slice(5).trim();
+    if (!trimmed.startsWith("data:") && !trimmed.startsWith("{")) continue;
+    const payload = trimmed.startsWith("data:") ? trimmed.slice(5).trim() : trimmed;
     if (!payload || payload === "[DONE]") continue;
     try {
       const chunk = JSON.parse(payload);
@@ -224,7 +225,10 @@ export function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
  */
 export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, clientRequestedModel, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, customToolNames, trackDone, appendLog, reqTag, log, earlyStreamCutoff = false }) {
   const contentType = providerResponse.headers.get("content-type") || "";
-  const isSSE = contentType.includes("text/event-stream") || (contentType === "" && isResponsesProvider(provider));
+  // A number of OpenAI-compatible gateways (including Foza) stream NDJSON/SSE
+  // while incorrectly declaring application/json. This feature forces the
+  // streaming path, so accept that body shape and normalize it below.
+  const isSSE = contentType.includes("text/event-stream") || earlyStreamCutoff || (contentType === "" && isResponsesProvider(provider));
   if (!isSSE) return null; // not handled here
 
   trackDone();
