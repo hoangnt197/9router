@@ -153,6 +153,7 @@ export function createSSEStream(options = {}) {
           let output;
           let injectedUsage = false;
           let responsesTerminal = false;
+          let isFinishChunk = false;
 
           if ((trimmed.startsWith("data:") || trimmed.startsWith("{")) && (trimmed.startsWith("{") || trimmed.slice(5).trim() !== "[DONE]")) {
             try {
@@ -230,7 +231,7 @@ export function createSSEStream(options = {}) {
                 usage = mergeUsage(usage, extracted);
               }
 
-              const isFinishChunk = parsed.choices?.[0]?.finish_reason;
+              isFinishChunk = Boolean(parsed.choices?.[0]?.finish_reason);
               // The completion signal is already fully decoded in memory. Cut
               // the upstream socket before doing any downstream bookkeeping so
               // trailing usage/metadata has no chance to be read.
