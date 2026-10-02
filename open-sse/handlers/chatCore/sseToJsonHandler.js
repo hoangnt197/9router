@@ -7,6 +7,7 @@ import { buildRequestDetail, extractRequestConfig, saveUsageStats, formatDoneLin
 import { ROLE, RESPONSES_ITEM } from "../../translator/schema/index.js";
 import { stripThinkingSuffix } from "../../translator/concerns/thinkingUnified.js";
 import { applyClientTokenUsagePolicy, applyResponsePolicy, createClientTokenUsagePolicy, createReasoningUsagePolicy, publicModelName } from "../../utils/reasoningUsagePolicy.js";
+import { estimateUsageWithoutBuffer } from "../../utils/usageTracking.js";
 
 // Responses-API providers (e.g. codex) may emit SSE without content-type + use Responses output shape
 const isResponsesProvider = (p) => PROVIDERS[p]?.format === FORMATS.OPENAI_RESPONSES;
@@ -19,6 +20,46 @@ function textFromResponsesMessageItem(item) {
   const anyText = item.content.find((c) => typeof c.text === "string");
   if (typeof anyText?.text === "string") return anyText.text;
   return "";
+}
+
+function outputLengthFromResponses(output) {
+  return (output || []).reduce((total, item) => total + (item?.content || []).reduce((n, part) => n + (typeof part?.text === "string" ? part.text.length : 0), 0), 0);
+}
+
+function isTerminalSSEBlock(block) {
+  const event = block.match(/^event:\s*([^\r\n]+)/m)?.[1]?.trim();
+  if (["response.completed", "response.done", "response.failed", "response.incomplete"].includes(event)) return true;
+  const data = block.match(/^data:\s*(.+)$/m)?.[1]?.trim();
+  if (!data || data === "[DONE]") return data === "[DONE]";
+  try { return Boolean(JSON.parse(data)?.choices?.some((choice) => choice?.finish_reason)); } catch { return false; }
+}
+
+// Read only through the semantic terminal event. This is intentionally used
+// for forced JSON responses too: Response.text() would otherwise wait for a
+// trailing upstream usage chunk that this feature must ignore.
+async function readSSEUntilTerminal(stream) {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let raw = "";
+  let pending = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const text = decoder.decode(value, { stream: true });
+      raw += text;
+      pending += text;
+      const blocks = pending.split(/\n\n/);
+      pending = blocks.pop() || "";
+      if (blocks.some(isTerminalSSEBlock)) {
+        await reader.cancel("early_stream_cutoff");
+        break;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return raw;
 }
 
 /**
@@ -181,7 +222,7 @@ export function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
  * Handle case: provider forced streaming but client wants JSON.
  * Supports both Codex/Responses API SSE and standard Chat Completions SSE.
  */
-export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, clientRequestedModel, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, customToolNames, trackDone, appendLog, reqTag, log }) {
+export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, clientRequestedModel, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, customToolNames, trackDone, appendLog, reqTag, log, earlyStreamCutoff = false }) {
   const contentType = providerResponse.headers.get("content-type") || "";
   const isSSE = contentType.includes("text/event-stream") || (contentType === "" && isResponsesProvider(provider));
   if (!isSSE) return null; // not handled here
@@ -202,7 +243,13 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
   const isCodexResponsesApi = isResponsesProvider(provider) || targetFormat === FORMATS.OPENAI_RESPONSES;
   if (isCodexResponsesApi) {
     try {
-      const jsonResponse = await convertResponsesStreamToJson(providerResponse.body);
+      const responseBody = earlyStreamCutoff
+        ? new ReadableStream({ start: async (controller) => { controller.enqueue(new TextEncoder().encode(await readSSEUntilTerminal(providerResponse.body))); controller.close(); } })
+        : providerResponse.body;
+      const jsonResponse = await convertResponsesStreamToJson(responseBody);
+      if (earlyStreamCutoff) {
+        jsonResponse.usage = estimateUsageWithoutBuffer(body, outputLengthFromResponses(jsonResponse.output), FORMATS.OPENAI_RESPONSES);
+      }
       if (onRequestSuccess) await onRequestSuccess();
 
       // This path bypasses the normal streaming/non-streaming handlers, so it
@@ -315,7 +362,7 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
 
   // Standard Chat Completions SSE path
   try {
-    const sseText = await providerResponse.text();
+    const sseText = earlyStreamCutoff ? await readSSEUntilTerminal(providerResponse.body) : await providerResponse.text();
     const parsed = parseSSEToOpenAIResponse(sseText, clientRequestedModel || body?.model || model);
     if (!parsed) return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Invalid SSE response for non-streaming request");
     if (parsed.error) {
@@ -329,7 +376,11 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
 
     applyResponsePolicy(parsed, createReasoningUsagePolicy(body, model));
 
-    const usage = parsed.usage || {};
+    const outputLength = (parsed.choices?.[0]?.message?.content || "").length + (parsed.choices?.[0]?.message?.reasoning_content || "").length;
+    const usage = earlyStreamCutoff
+      ? estimateUsageWithoutBuffer(body, outputLength, FORMATS.OPENAI)
+      : (parsed.usage || {});
+    if (earlyStreamCutoff) parsed.usage = usage;
     appendLog({ tokens: usage, status: "200 OK" });
       saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, requestBody: body || finalBody || translatedBody, silent: true });
     if (log?.line) log.line(reqTag, "📊", formatDoneLine({ usage, latency: { total: Date.now() - requestStartTime } }));

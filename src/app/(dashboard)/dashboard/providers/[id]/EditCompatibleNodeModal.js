@@ -10,6 +10,7 @@ export default function EditCompatibleNodeModal({ isOpen, node, onSave, onClose,
     prefix: "",
     apiType: "chat",
     baseUrl: "https://api.openai.com/v1",
+    earlyStreamCutoff: false,
   });
   const [saving, setSaving] = useState(false);
   const [checkKey, setCheckKey] = useState("");
@@ -24,6 +25,7 @@ export default function EditCompatibleNodeModal({ isOpen, node, onSave, onClose,
         prefix: node.prefix || "",
         apiType: node.apiType || "chat",
         baseUrl: node.baseUrl || (isAnthropic ? "https://api.anthropic.com/v1" : "https://api.openai.com/v1"),
+        earlyStreamCutoff: node.earlyStreamCutoff === true,
       });
     }
   }, [node, isAnthropic]);
@@ -44,6 +46,7 @@ export default function EditCompatibleNodeModal({ isOpen, node, onSave, onClose,
       };
       if (!isAnthropic) {
         payload.apiType = formData.apiType;
+        payload.earlyStreamCutoff = formData.earlyStreamCutoff;
       }
       await onSave(payload);
     } finally {
@@ -93,12 +96,26 @@ export default function EditCompatibleNodeModal({ isOpen, node, onSave, onClose,
           hint="Required. Used as the provider prefix for model IDs."
         />
         {!isAnthropic && (
-          <Select
-            label="API Type"
-            options={apiTypeOptions}
-            value={formData.apiType}
-            onChange={(e) => setFormData({ ...formData, apiType: e.target.value })}
-          />
+          <>
+            <Select
+              label="API Type"
+              options={apiTypeOptions}
+              value={formData.apiType}
+              onChange={(e) => setFormData({ ...formData, apiType: e.target.value })}
+            />
+            <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border p-3">
+              <input
+                type="checkbox"
+                checked={formData.earlyStreamCutoff}
+                onChange={(e) => setFormData({ ...formData, earlyStreamCutoff: e.target.checked })}
+                className="mt-1"
+              />
+              <span>
+                <span className="block text-sm font-medium">End upstream stream early</span>
+                <span className="block text-sm text-text-muted">Stop reading upstream after its completion event and calculate usage locally.</span>
+              </span>
+            </label>
+          </>
         )}
         <Input
           label="Base URL"
@@ -154,6 +171,7 @@ EditCompatibleNodeModal.propTypes = {
     prefix: PropTypes.string,
     apiType: PropTypes.string,
     baseUrl: PropTypes.string,
+    earlyStreamCutoff: PropTypes.bool,
   }),
   onSave: PropTypes.func.isRequired,
   onClose: PropTypes.func.isRequired,

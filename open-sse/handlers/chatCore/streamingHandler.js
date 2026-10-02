@@ -26,7 +26,7 @@ const CODEX_SOURCE_TO_TARGET = {
 /**
  * Determine which SSE transform stream to use based on provider/format.
  */
-export function buildTransformStream({ provider, sourceFormat, targetFormat, userAgent, reqLogger, toolNameMap, customToolNames, model, clientRequestedModel, connectionId, body, onStreamComplete, apiKey, credentials }) {
+export function buildTransformStream({ provider, sourceFormat, targetFormat, userAgent, reqLogger, toolNameMap, customToolNames, model, clientRequestedModel, connectionId, body, onStreamComplete, apiKey, credentials, earlyStreamCutoff, onEarlyTerminal }) {
   const isDroidCLI = userAgent?.toLowerCase().includes("droid") || userAgent?.toLowerCase().includes("codex-cli");
   // Responses-API providers (e.g. codex) emit Responses SSE → translate into client format.
   // When both sides already speak Responses, keep the response-event framing and
@@ -53,26 +53,29 @@ export function buildTransformStream({ provider, sourceFormat, targetFormat, use
       onStreamComplete,
       apiKey,
       customToolNames,
-      model
+      model,
+      null,
+      earlyStreamCutoff,
+      onEarlyTerminal
     );
   }
 
   if (needsCodexTranslation) {
     const codexTarget = CODEX_SOURCE_TO_TARGET[sourceFormat] || FORMATS.OPENAI;
-    return createSSETransformStreamWithLogger(FORMATS.OPENAI_RESPONSES, codexTarget, provider, reqLogger, toolNameMap, clientModel, connectionId, body, onStreamComplete, apiKey, customToolNames, credentials, model);
+    return createSSETransformStreamWithLogger(FORMATS.OPENAI_RESPONSES, codexTarget, provider, reqLogger, toolNameMap, clientModel, connectionId, body, onStreamComplete, apiKey, customToolNames, credentials, model, earlyStreamCutoff, onEarlyTerminal);
   }
 
   if (needsTranslation(targetFormat, sourceFormat)) {
-    return createSSETransformStreamWithLogger(targetFormat, sourceFormat, provider, reqLogger, toolNameMap, clientModel, connectionId, body, onStreamComplete, apiKey, customToolNames, credentials, model);
+    return createSSETransformStreamWithLogger(targetFormat, sourceFormat, provider, reqLogger, toolNameMap, clientModel, connectionId, body, onStreamComplete, apiKey, customToolNames, credentials, model, earlyStreamCutoff, onEarlyTerminal);
   }
 
-  return createPassthroughStreamWithLogger(provider, reqLogger, clientModel, connectionId, body, onStreamComplete, apiKey, model);
+  return createPassthroughStreamWithLogger(provider, reqLogger, clientModel, connectionId, body, onStreamComplete, apiKey, model, earlyStreamCutoff, onEarlyTerminal);
 }
 
 /**
  * Handle streaming response — pipe provider SSE through transform stream to client.
  */
-export async function handleStreamingResponse({ providerResponse, provider, model, clientRequestedModel, sourceFormat, targetFormat, userAgent, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, customToolNames, streamController, onStreamComplete, streamDetailId, pxpipe, reqTag, log, credentials }) {
+export async function handleStreamingResponse({ providerResponse, provider, model, clientRequestedModel, sourceFormat, targetFormat, userAgent, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, reqLogger, toolNameMap, customToolNames, streamController, onStreamComplete, streamDetailId, pxpipe, reqTag, log, credentials, earlyStreamCutoff = false }) {
   if (onRequestSuccess) {
     Promise.resolve()
       .then(onRequestSuccess)
@@ -108,7 +111,7 @@ export async function handleStreamingResponse({ providerResponse, provider, mode
     };
   }
 
-  const transformStream = buildTransformStream({ provider, sourceFormat, targetFormat, userAgent, reqLogger, toolNameMap, customToolNames, model, clientRequestedModel, connectionId, body, onStreamComplete, apiKey, credentials });
+  const transformStream = buildTransformStream({ provider, sourceFormat, targetFormat, userAgent, reqLogger, toolNameMap, customToolNames, model, clientRequestedModel, connectionId, body, onStreamComplete, apiKey, credentials, earlyStreamCutoff, onEarlyTerminal: () => streamController.completeEarly() });
 
   // Terminal bytes when the stream aborts after HTTP 200 was already sent, so the
   // client sees a real error instead of a silently truncated stream.

@@ -19,6 +19,7 @@ export function createStreamController({ onDisconnect, onError, log, provider, m
   const abortController = new AbortController();
   const startTime = Date.now();
   let disconnected = false;
+  let earlyCompleted = false;
   let abortTimeout = null;
 
   // Only abnormal terminations are logged; normal completion is covered by "📊 done".
@@ -35,6 +36,7 @@ export function createStreamController({ onDisconnect, onError, log, provider, m
     startTime,
 
     isConnected: () => !disconnected,
+    isEarlyCompleted: () => earlyCompleted,
 
     // Call when client disconnects
     handleDisconnect: (reason = "client_closed") => {
@@ -62,6 +64,16 @@ export function createStreamController({ onDisconnect, onError, log, provider, m
         clearTimeout(abortTimeout);
         abortTimeout = null;
       }
+    },
+
+    // The transform has already emitted a valid terminal event. Abort the
+    // upstream fetch without synthesizing an error frame for the client.
+    completeEarly: () => {
+      if (earlyCompleted) return;
+      earlyCompleted = true;
+      disconnected = true;
+      if (abortTimeout) clearTimeout(abortTimeout);
+      abortController.abort();
     },
 
     // Call on error
@@ -116,6 +128,10 @@ export function createDisconnectAwareStream(transformStream, streamController, o
 
   return new ReadableStream({
     async pull(controller) {
+      if (streamController.isEarlyCompleted?.()) {
+        controller.close();
+        return;
+      }
       if (!streamController.isConnected()) {
         emitTerminal(controller);
         controller.close();
@@ -132,6 +148,10 @@ export function createDisconnectAwareStream(transformStream, streamController, o
         }
         controller.enqueue(value);
       } catch (error) {
+        if (streamController.isEarlyCompleted?.()) {
+          controller.close();
+          return;
+        }
         const wasConnected = streamController.isConnected();
         // Controller already closed = downstream ended; not an upstream error, skip noisy log.
         const msg0 = error?.message || "";
@@ -221,10 +241,12 @@ export function pipeWithDisconnect(providerResponse, transformStream, streamCont
     signal: streamController.signal,
     startTime: streamController.startTime,
     isConnected: () => streamController.isConnected(),
+    isEarlyCompleted: () => streamController.isEarlyCompleted?.(),
     handleComplete: () => { dbg(tag, `complete | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); streamController.handleComplete(); },
     handleError: (e) => { dbg(tag, `error: ${e?.message} | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); streamController.handleError(e); },
     handleDisconnect: (r) => { dbg(tag, `disconnect: ${r} | chunks=${chunkCount} | bytes=${totalBytes} | dur=${Date.now() - t0}ms`); clearStall(); streamController.handleDisconnect(r); },
-    abort: () => { clearStall(); streamController.abort(); }
+    abort: () => { clearStall(); streamController.abort(); },
+    completeEarly: () => { clearStall(); streamController.completeEarly?.(); }
   };
 
   armStall();
@@ -257,4 +279,3 @@ export function pipeWithDisconnect(providerResponse, transformStream, streamCont
     onAbortTerminal ? () => onAbortTerminal(abortMessage) : null
   );
 }
-

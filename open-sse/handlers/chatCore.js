@@ -137,7 +137,9 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     || sourceFormat === FORMATS.GEMINI
     || sourceFormat === FORMATS.GEMINI_CLI;
   const providerRequiresStreaming = PROVIDERS[provider]?.forceStream === true;
-  let stream = providerRequiresStreaming ? true : clientRequestedStreaming;
+  const earlyStreamCutoff = credentials?.providerSpecificData?.earlyStreamCutoff === true;
+  const upstreamRequiresStreaming = providerRequiresStreaming || earlyStreamCutoff;
+  let stream = upstreamRequiresStreaming ? true : clientRequestedStreaming;
 
   // Image generation models require non-streaming (Google v1internal:generateContent)
   const modelType = getModelType(alias, model);
@@ -511,8 +513,8 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   const trackDone = () => trackPendingRequest(model, provider, connectionId, false);
 
   // Provider forced streaming but client wants JSON
-  if (!clientRequestedStreaming && providerRequiresStreaming) {
-    const result = await handleForcedSSEToJson({ ...sharedCtx, providerResponse, sourceFormat, targetFormat: providerResponseFormat, customToolNames, trackDone, appendLog });
+  if (!clientRequestedStreaming && upstreamRequiresStreaming) {
+    const result = await handleForcedSSEToJson({ ...sharedCtx, providerResponse, sourceFormat, targetFormat: providerResponseFormat, customToolNames, trackDone, appendLog, earlyStreamCutoff });
     if (result) { streamController.handleComplete(); return result; }
   }
 
@@ -525,7 +527,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
   // Streaming response
   const { onStreamComplete, streamDetailId } = buildOnStreamComplete({ ...sharedCtx });
-  return handleStreamingResponse({ ...sharedCtx, providerResponse, sourceFormat, targetFormat: providerResponseFormat, userAgent, reqLogger, toolNameMap, customToolNames, streamController, onStreamComplete, streamDetailId, credentials });
+  return handleStreamingResponse({ ...sharedCtx, providerResponse, sourceFormat, targetFormat: providerResponseFormat, userAgent, reqLogger, toolNameMap, customToolNames, streamController, onStreamComplete, streamDetailId, credentials, earlyStreamCutoff });
 }
 
 export function isTokenExpiringSoon(expiresAt, bufferMs = 5 * 60 * 1000) {

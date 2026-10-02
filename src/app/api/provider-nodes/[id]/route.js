@@ -6,7 +6,7 @@ export async function PUT(request, { params }) {
   try {
     const { id } = await params;
     const body = await request.json();
-    const { name, prefix, apiType, baseUrl } = body;
+    const { name, prefix, apiType, baseUrl, earlyStreamCutoff } = body;
     const node = await getProviderNodeById(id);
 
     if (!node) {
@@ -56,6 +56,7 @@ export async function PUT(request, { params }) {
 
     if (node.type === "openai-compatible") {
       updates.apiType = apiType;
+      updates.earlyStreamCutoff = earlyStreamCutoff === true;
     }
 
     const updated = await updateProviderNode(id, updates);
@@ -69,6 +70,7 @@ export async function PUT(request, { params }) {
           apiType: node.type === "openai-compatible" ? apiType : undefined,
           baseUrl: sanitizedBaseUrl,
           nodeName: updated.name,
+          ...(node.type === "openai-compatible" ? { earlyStreamCutoff: updated.earlyStreamCutoff === true } : {}),
         }
       })
     )));

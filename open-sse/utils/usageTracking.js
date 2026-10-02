@@ -84,7 +84,7 @@ export function filterUsageForFormat(usage, targetFormat) {
       'estimated'
     ],
     [FORMATS.OPENAI_RESPONSES]: [
-      'input_tokens', 'output_tokens',
+      'input_tokens', 'output_tokens', 'total_tokens',
       'input_tokens_details', 'output_tokens_details',
       'estimated'
     ],
@@ -402,6 +402,21 @@ export function estimateUsage(body, contentLength, targetFormat = FORMATS.OPENAI
     estimateOutputTokens(contentLength),
     targetFormat
   );
+}
+
+// Compatible-node early cutoff deliberately never trusts upstream usage and
+// must not apply the legacy context buffer. Keep this separate so ordinary
+// providers retain their existing accounting behavior.
+export function estimateUsageWithoutBuffer(body, contentLength, targetFormat = FORMATS.OPENAI_RESPONSES) {
+  const inputTokens = estimateInputTokens(body);
+  const outputTokens = estimateOutputTokens(contentLength);
+  if (targetFormat === FORMATS.OPENAI_RESPONSES) {
+    return { input_tokens: inputTokens, output_tokens: outputTokens, total_tokens: inputTokens + outputTokens, estimated: true };
+  }
+  if (targetFormat === FORMATS.CLAUDE) {
+    return { input_tokens: inputTokens, output_tokens: outputTokens, estimated: true };
+  }
+  return { prompt_tokens: inputTokens, completion_tokens: outputTokens, total_tokens: inputTokens + outputTokens, estimated: true };
 }
 
 /**

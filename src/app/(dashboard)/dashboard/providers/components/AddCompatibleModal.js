@@ -40,6 +40,7 @@ function AddCompatibleModal({ variant, isOpen, onClose, onCreated }) {
     name: "",
     prefix: "",
     ...(config.hasApiType ? { apiType: "chat" } : {}),
+    ...(config.hasApiType ? { earlyStreamCutoff: false } : {}),
     baseUrl: config.defaultBaseUrl,
   });
 
@@ -72,6 +73,7 @@ function AddCompatibleModal({ variant, isOpen, onClose, onCreated }) {
           name: formData.name,
           prefix: formData.prefix,
           ...(config.hasApiType ? { apiType: formData.apiType } : {}),
+          ...(config.hasApiType ? { earlyStreamCutoff: formData.earlyStreamCutoff } : {}),
           baseUrl: formData.baseUrl,
           type: config.type,
         }),
@@ -151,12 +153,26 @@ function AddCompatibleModal({ variant, isOpen, onClose, onCreated }) {
           hint="Required. Used as the provider prefix for model IDs."
         />
         {config.hasApiType && (
-          <Select
-            label="API Type"
-            options={API_TYPE_OPTIONS}
-            value={formData.apiType}
-            onChange={(e) => setFormData({ ...formData, apiType: e.target.value })}
-          />
+          <>
+            <Select
+              label="API Type"
+              options={API_TYPE_OPTIONS}
+              value={formData.apiType}
+              onChange={(e) => setFormData({ ...formData, apiType: e.target.value })}
+            />
+            <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-border p-3">
+              <input
+                type="checkbox"
+                checked={formData.earlyStreamCutoff}
+                onChange={(e) => setFormData({ ...formData, earlyStreamCutoff: e.target.checked })}
+                className="mt-1"
+              />
+              <span>
+                <span className="block text-sm font-medium">End upstream stream early</span>
+                <span className="block text-sm text-text-muted">Stop reading upstream after its completion event and calculate usage locally.</span>
+              </span>
+            </label>
+          </>
         )}
         <Input
           label="Base URL"
