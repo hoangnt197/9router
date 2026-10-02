@@ -288,16 +288,18 @@ export function createSSEStream(options = {}) {
             }
           }
 
+          // `completeEarly()` closes the downstream reader after the current
+          // queued value. Put the OpenAI sentinel in that same value so a
+          // client always receives a complete terminal sequence.
+          if (earlyStreamCutoff && isFinishChunk && sourceFormat !== FORMATS.OPENAI_RESPONSES && !streamDoneSent) {
+            output += "data: [DONE]\n\n";
+            streamDoneSent = true;
+          }
+
           reqLogger?.appendConvertedChunk?.(output);
           controller.enqueue(sharedEncoder.encode(output));
           // Responses clients (codex CLI) close on response.completed instead of [DONE]
           if (earlyStreamCutoff && (isFinishChunk || responsesTerminal)) {
-            if (isFinishChunk && !streamDoneSent && sourceFormat !== FORMATS.OPENAI_RESPONSES) {
-              const doneOutput = "data: [DONE]\n\n";
-              reqLogger?.appendConvertedChunk?.(doneOutput);
-              controller.enqueue(sharedEncoder.encode(doneOutput));
-              streamDoneSent = true;
-            }
             finalizeStream();
             return;
           }
