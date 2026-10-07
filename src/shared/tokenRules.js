@@ -36,39 +36,7 @@ export function normalizeTokenRules(rules) {
   return unlimited ? [...finite, unlimited] : finite;
 }
 
-export const DEFAULT_TOKEN_RULE_PRESETS = [
-  {
-    id: "builtin-gentle",
-    name: "Nhẹ 1.2–1.5×",
-    builtIn: true,
-    inputTokenRules: [{ upTo: null, multiplierMin: 1.2, multiplierMax: 1.5, chance: 100 }],
-    outputTokenRules: [{ upTo: null, multiplierMin: 1.2, multiplierMax: 1.5, chance: 100 }],
-  },
-  {
-    id: "builtin-double",
-    name: "Cố định 2×",
-    builtIn: true,
-    inputTokenRules: [{ upTo: null, multiplierMin: 2, multiplierMax: 2, chance: 100 }],
-    outputTokenRules: [{ upTo: null, multiplierMin: 2, multiplierMax: 2, chance: 100 }],
-  },
-  {
-    id: "builtin-tiered",
-    name: "Theo ngưỡng 2.5× / 1.8× / 1.2×",
-    builtIn: true,
-    inputTokenRules: [
-      { upTo: 2000, multiplierMin: 2.5, multiplierMax: 2.5, chance: 100 },
-      { upTo: 10000, multiplierMin: 1.8, multiplierMax: 1.8, chance: 100 },
-      { upTo: null, multiplierMin: 1.2, multiplierMax: 1.2, chance: 100 },
-    ],
-    outputTokenRules: [
-      { upTo: 2000, multiplierMin: 2.5, multiplierMax: 2.5, chance: 100 },
-      { upTo: 10000, multiplierMin: 1.8, multiplierMax: 1.8, chance: 100 },
-      { upTo: null, multiplierMin: 1.2, multiplierMax: 1.2, chance: 100 },
-    ],
-  },
-];
-
-export function normalizeTokenRulePreset(preset, { builtIn = false } = {}) {
+export function normalizeTokenRulePreset(preset) {
   if (!preset || typeof preset !== "object") return null;
   const name = typeof preset.name === "string" ? preset.name.trim().slice(0, 80) : "";
   const id = typeof preset.id === "string" ? preset.id.trim() : "";
@@ -76,15 +44,13 @@ export function normalizeTokenRulePreset(preset, { builtIn = false } = {}) {
   return {
     id,
     name,
-    ...(builtIn ? { builtIn: true } : {}),
     inputTokenRules: normalizeTokenRules(preset.inputTokenRules),
     outputTokenRules: normalizeTokenRules(preset.outputTokenRules),
   };
 }
 
 export function getTokenRulePresets(value) {
-  const custom = Array.isArray(value)
+  return Array.isArray(value)
     ? value.map((preset) => normalizeTokenRulePreset(preset)).filter(Boolean)
     : [];
-  return [...DEFAULT_TOKEN_RULE_PRESETS, ...custom.filter((preset) => !DEFAULT_TOKEN_RULE_PRESETS.some((base) => base.id === preset.id))];
 }

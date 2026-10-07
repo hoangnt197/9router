@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSettings, updateSettings } from "@/lib/localDb";
-import { DEFAULT_TOKEN_RULE_PRESETS, getTokenRulePresets, normalizeTokenRulePreset } from "@/shared/tokenRules.js";
+import { getTokenRulePresets, normalizeTokenRulePreset } from "@/shared/tokenRules.js";
 
 export const dynamic = "force-dynamic";
 
@@ -40,8 +40,8 @@ export async function DELETE(request) {
   try {
     const body = await request.json().catch(() => ({}));
     const id = typeof body.id === "string" ? body.id : "";
-    if (!id || DEFAULT_TOKEN_RULE_PRESETS.some((preset) => preset.id === id)) {
-      return NextResponse.json({ error: "This preset cannot be deleted" }, { status: 400 });
+    if (!id) {
+      return NextResponse.json({ error: "Preset id is required" }, { status: 400 });
     }
     const settings = await getSettings();
     const custom = Array.isArray(settings.tokenRulePresets) ? settings.tokenRulePresets : [];
