@@ -65,6 +65,8 @@ const DEFAULT_SETTINGS = {
   pxpipeMinChars: 25000,
   pxpipeTimeoutMs: 15000,
   enableCyberFilter: true,
+  // Custom presets only. The API layers built-in presets on top.
+  tokenRulePresets: [],
 };
 
 let cachedMergedSettings = null;

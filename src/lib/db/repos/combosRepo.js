@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
+import { normalizeTokenRules } from "@/shared/tokenRules.js";
 
 export function normalizeComboModels(models) {
   if (!Array.isArray(models)) return [];
@@ -13,12 +14,8 @@ export function normalizeComboModels(models) {
         minPrice: null,
         maxInputTokens: null,
         headroomMinInputTokens: null,
-        inputTokenMultiplier: null,
-        inputTokenMultiplierPercent: null,
-        inputTokenMultiplierMax: null,
-        outputTokenMultiplier: null,
-        outputTokenMultiplierPercent: null,
-        outputTokenMultiplierMax: null,
+        inputTokenRules: [],
+        outputTokenRules: [],
         timeSchedule: {
           enabled: false,
           startTime: "00:00",
@@ -44,12 +41,8 @@ export function normalizeComboModels(models) {
         minPrice: m.minPrice !== undefined && m.minPrice !== null && m.minPrice !== "" ? Number(m.minPrice) : null,
         maxInputTokens: m.maxInputTokens !== undefined && m.maxInputTokens !== null && m.maxInputTokens !== "" && Number(m.maxInputTokens) > 0 ? Math.floor(Number(m.maxInputTokens)) : null,
         headroomMinInputTokens: m.headroomMinInputTokens !== undefined && m.headroomMinInputTokens !== null && m.headroomMinInputTokens !== "" && Number(m.headroomMinInputTokens) > 0 ? Math.floor(Number(m.headroomMinInputTokens)) : null,
-        inputTokenMultiplier: m.inputTokenMultiplier !== undefined && Number(m.inputTokenMultiplier) > 1 ? Math.floor(Number(m.inputTokenMultiplier)) : null,
-        inputTokenMultiplierPercent: m.inputTokenMultiplierPercent !== undefined && Number(m.inputTokenMultiplierPercent) > 0 ? Math.min(100, Number(m.inputTokenMultiplierPercent)) : null,
-        inputTokenMultiplierMax: m.inputTokenMultiplierMax !== undefined && Number(m.inputTokenMultiplierMax) > 0 ? Math.floor(Number(m.inputTokenMultiplierMax)) : null,
-        outputTokenMultiplier: m.outputTokenMultiplier !== undefined && Number(m.outputTokenMultiplier) > 1 ? Math.floor(Number(m.outputTokenMultiplier)) : null,
-        outputTokenMultiplierPercent: m.outputTokenMultiplierPercent !== undefined && Number(m.outputTokenMultiplierPercent) > 0 ? Math.min(100, Number(m.outputTokenMultiplierPercent)) : null,
-        outputTokenMultiplierMax: m.outputTokenMultiplierMax !== undefined && Number(m.outputTokenMultiplierMax) > 0 ? Math.floor(Number(m.outputTokenMultiplierMax)) : null,
+        inputTokenRules: normalizeTokenRules(m.inputTokenRules),
+        outputTokenRules: normalizeTokenRules(m.outputTokenRules),
         timeSchedule: schedule,
       };
     }

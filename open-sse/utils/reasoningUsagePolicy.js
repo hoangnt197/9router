@@ -11,6 +11,28 @@ const COMBO_MODEL_TOKEN_RULES = "__shortlabComboTokenRules";
 const COMBO_ORIGINAL_NAME = "__shortlabOriginalComboName";
 const CLIENT_USAGE_APPLIED = "__shortlabClientUsageApplied";
 
+function normalizeTokenRules(rules) {
+  if (!Array.isArray(rules)) return [];
+  const finite = [];
+  let unlimited = null;
+  for (const rule of rules) {
+    const min = Number(rule?.multiplierMin);
+    if (!Number.isFinite(min) || min < 1) continue;
+    const rawMax = rule?.multiplierMax;
+    const max = rawMax === null || rawMax === undefined || rawMax === "" ? null : Number(rawMax);
+    if (max !== null && (!Number.isFinite(max) || max < min)) continue;
+    const rawUpTo = rule?.upTo;
+    const upTo = rawUpTo === null || rawUpTo === undefined || rawUpTo === "" ? null : Math.floor(Number(rawUpTo));
+    if (upTo !== null && (!Number.isFinite(upTo) || upTo < 1)) continue;
+    const chanceValue = Number(rule?.chance);
+    const normalized = { upTo, multiplierMin: min, multiplierMax: max, chance: Number.isFinite(chanceValue) ? Math.max(0, Math.min(100, chanceValue)) : 100 };
+    if (upTo === null) unlimited ||= normalized;
+    else finite.push(normalized);
+  }
+  finite.sort((a, b) => a.upTo - b.upTo);
+  return unlimited ? [...finite, unlimited] : finite;
+}
+
 export function isComboModelRequest(body) {
   return body?.[COMBO_MODEL_MARKER] === true;
 }
@@ -104,23 +126,6 @@ export function createReasoningUsagePolicy(body, effectiveModel) {
   };
 }
 
-function positiveInteger(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed >= 1 ? Math.floor(parsed) : null;
-}
-
-function percentage(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.min(100, parsed) : 0;
-}
-
-function readTokenRule(item, prefix) {
-  const multiplier = positiveInteger(item?.[`${prefix}TokenMultiplier`]);
-  const chance = percentage(item?.[`${prefix}TokenMultiplierPercent`]);
-  const maxTokens = positiveInteger(item?.[`${prefix}TokenMultiplierMax`]);
-  return multiplier && multiplier > 1 && chance > 0 ? { multiplier, chance, maxTokens } : null;
-}
-
 /**
  * Token multipliers are intentionally a client-only presentation policy.
  * Accounting must continue to use the original provider usage.
@@ -128,24 +133,25 @@ function readTokenRule(item, prefix) {
 export function createClientTokenUsagePolicy(body) {
   const item = body?.[COMBO_MODEL_TOKEN_RULES];
   if (body?.[COMBO_MODEL_MARKER] !== true || !item || typeof item !== "object") return null;
-  const input = readTokenRule(item, "input");
-  const output = readTokenRule(item, "output");
-  return input || output ? { input, output } : null;
+  const input = normalizeTokenRules(item.inputTokenRules);
+  const output = normalizeTokenRules(item.outputTokenRules);
+  return input.length || output.length ? { input, output } : null;
 }
 
-function appliedTokenMultiplier(value, rule, random) {
-  if (!rule || !Number.isFinite(value) || value <= 0 || random() * 100 >= rule.chance) return 1;
-  let multiplier = rule.multiplier;
-  // The cap limits multiplication only: never reduce a real upstream value.
-  if (rule.maxTokens && value <= rule.maxTokens) {
-    multiplier = Math.min(multiplier, Math.floor(rule.maxTokens / value));
-  }
+function appliedTokenMultiplier(value, rules, random) {
+  if (!Number.isFinite(value) || value <= 0) return 1;
+  const rule = rules?.find((candidate) => candidate.upTo === null || value <= candidate.upTo);
+  if (!rule || rule.chance <= 0 || random() * 100 >= rule.chance) return 1;
+  const max = rule.multiplierMax ?? rule.multiplierMin;
+  const multiplier = max === rule.multiplierMin
+    ? rule.multiplierMin
+    : rule.multiplierMin + random() * (max - rule.multiplierMin);
   return multiplier > 1 ? multiplier : 1;
 }
 
 function scaleTokenField(target, key, multiplier) {
   if (!target || multiplier <= 1 || !Number.isFinite(Number(target[key]))) return;
-  target[key] = Number(target[key]) * multiplier;
+  target[key] = Math.round(Number(target[key]) * multiplier);
 }
 
 function scaleInputCacheBreakdown(usage, multiplier) {
@@ -172,6 +178,18 @@ function inputMultiplierBasis(usage, inputKey, input) {
   return input;
 }
 
+function inputUsageExtraKeys(usage, inputKey) {
+  // Claude-style usage reports cache reads/writes alongside input_tokens rather
+  // than inside it. They are billable input context and must remain visible in
+  // the reconciled total after their shared input tier is applied.
+  if (inputKey === "input_tokens"
+      && usage.input_tokens_details === undefined
+      && (usage.cache_read_input_tokens !== undefined || usage.cache_creation_input_tokens !== undefined)) {
+    return ["cache_read_input_tokens", "cache_creation_input_tokens"];
+  }
+  return [];
+}
+
 function applyUsageMultiplier(usage, inputKey, outputKey, totalKey, policy, random, options = {}) {
   if (!usage || typeof usage !== "object" || usage[CLIENT_USAGE_APPLIED]) return;
   Object.defineProperty(usage, CLIENT_USAGE_APPLIED, { value: true, enumerable: false });
@@ -179,14 +197,14 @@ function applyUsageMultiplier(usage, inputKey, outputKey, totalKey, policy, rand
   const output = Number(usage[outputKey]);
   const inputMultiplier = appliedTokenMultiplier(inputMultiplierBasis(usage, inputKey, input), policy?.input, random);
   const outputMultiplier = appliedTokenMultiplier(output, policy?.output, random);
-  const nextInput = Number.isFinite(input) ? input * inputMultiplier : input;
-  const nextOutput = Number.isFinite(output) ? output * outputMultiplier : output;
+  const nextInput = Number.isFinite(input) ? Math.round(input * inputMultiplier) : input;
+  const nextOutput = Number.isFinite(output) ? Math.round(output * outputMultiplier) : output;
   if (Number.isFinite(nextInput)) usage[inputKey] = nextInput;
   if (Number.isFinite(nextOutput)) usage[outputKey] = nextOutput;
   scaleInputCacheBreakdown(usage, inputMultiplier);
 
   if (options.recalculateTotal && Number.isFinite(nextInput) && Number.isFinite(nextOutput)) {
-    const extraTokens = (options.totalExtraKeys || [])
+    const extraTokens = [...inputUsageExtraKeys(usage, inputKey), ...(options.totalExtraKeys || [])]
       .reduce((sum, key) => sum + (Number(usage[key]) || 0), 0);
     usage[totalKey] = nextInput + nextOutput + extraTokens;
   }
