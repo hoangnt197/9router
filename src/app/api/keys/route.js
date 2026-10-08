@@ -34,6 +34,8 @@ export async function POST(request) {
       name: apiKey.name,
       id: apiKey.id,
       machineId: apiKey.machineId,
+      inputTokenRules: [],
+      outputTokenRules: [],
     }, { status: 201 });
   } catch (error) {
     console.log("Error creating key:", error);

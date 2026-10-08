@@ -1,7 +1,6 @@
 import { v4 as uuidv4 } from "uuid";
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
-import { normalizeTokenRules } from "@/shared/tokenRules.js";
 
 export function normalizeComboModels(models) {
   if (!Array.isArray(models)) return [];
@@ -14,8 +13,6 @@ export function normalizeComboModels(models) {
         minPrice: null,
         maxInputTokens: null,
         headroomMinInputTokens: null,
-        inputTokenRules: [],
-        outputTokenRules: [],
         timeSchedule: {
           enabled: false,
           startTime: "00:00",
@@ -41,8 +38,6 @@ export function normalizeComboModels(models) {
         minPrice: m.minPrice !== undefined && m.minPrice !== null && m.minPrice !== "" ? Number(m.minPrice) : null,
         maxInputTokens: m.maxInputTokens !== undefined && m.maxInputTokens !== null && m.maxInputTokens !== "" && Number(m.maxInputTokens) > 0 ? Math.floor(Number(m.maxInputTokens)) : null,
         headroomMinInputTokens: m.headroomMinInputTokens !== undefined && m.headroomMinInputTokens !== null && m.headroomMinInputTokens !== "" && Number(m.headroomMinInputTokens) > 0 ? Math.floor(Number(m.headroomMinInputTokens)) : null,
-        inputTokenRules: normalizeTokenRules(m.inputTokenRules),
-        outputTokenRules: normalizeTokenRules(m.outputTokenRules),
         timeSchedule: schedule,
       };
     }

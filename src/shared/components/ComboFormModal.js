@@ -26,38 +26,6 @@ function lookupSystemPrice(modelStr, systemPricing) {
   return null;
 }
 
-function normalizeRulesForSave(rules) {
-  if (!Array.isArray(rules)) return [];
-  return rules.map((rule) => {
-    const min = Number(rule?.multiplierMin);
-    const max = rule?.multiplierMax === "" || rule?.multiplierMax === null || rule?.multiplierMax === undefined ? null : Number(rule.multiplierMax);
-    const upTo = rule?.upTo === "" || rule?.upTo === null || rule?.upTo === undefined ? null : Math.floor(Number(rule.upTo));
-    const chance = Number(rule?.chance);
-    if (!Number.isFinite(min) || min < 1 || (max !== null && (!Number.isFinite(max) || max < min)) || (upTo !== null && (!Number.isFinite(upTo) || upTo < 1))) return null;
-    return { upTo, multiplierMin: min, multiplierMax: max, chance: Number.isFinite(chance) ? Math.max(0, Math.min(100, chance)) : 100 };
-  }).filter(Boolean).sort((a, b) => (a.upTo === null ? Infinity : a.upTo) - (b.upTo === null ? Infinity : b.upTo));
-}
-
-function TokenRuleEditor({ label, rules, onChange }) {
-  const update = (index, patch) => onChange(rules.map((rule, i) => i === index ? { ...rule, ...patch } : rule));
-  return (
-    <div className="space-y-1.5 rounded border border-black/5 p-2 dark:border-white/5">
-      <div className="flex items-center justify-between"><span className="text-[11px] font-medium text-text-main">{label}</span><button type="button" onClick={() => onChange([...rules, { upTo: null, multiplierMin: 1, multiplierMax: "", chance: 100 }])} className="text-[10px] text-primary hover:underline">+ Add tier</button></div>
-      {rules.length === 0 && <p className="text-[10px] text-text-muted">No multiplier tiers.</p>}
-      {rules.map((rule, index) => (
-        <div key={index} className="grid grid-cols-[1.1fr_1fr_1fr_0.9fr_auto] gap-1">
-          <input type="number" min="1" step="1" placeholder="Unlimited" value={rule.upTo ?? ""} onChange={(e) => update(index, { upTo: e.target.value })} title="Apply when tokens are at or below this value; blank means unlimited" className="min-w-0 rounded border border-black/10 bg-white px-1.5 py-1 font-mono text-[10px] outline-none dark:border-white/10 dark:bg-black/20" />
-          <input type="number" min="1" step="0.01" placeholder="Min ×" value={rule.multiplierMin ?? ""} onChange={(e) => update(index, { multiplierMin: e.target.value })} className="min-w-0 rounded border border-black/10 bg-white px-1.5 py-1 font-mono text-[10px] outline-none dark:border-white/10 dark:bg-black/20" />
-          <input type="number" min="1" step="0.01" placeholder="Max ×" value={rule.multiplierMax ?? ""} onChange={(e) => update(index, { multiplierMax: e.target.value })} className="min-w-0 rounded border border-black/10 bg-white px-1.5 py-1 font-mono text-[10px] outline-none dark:border-white/10 dark:bg-black/20" />
-          <input type="number" min="0" max="100" step="1" placeholder="100%" value={rule.chance ?? 100} onChange={(e) => update(index, { chance: e.target.value })} className="min-w-0 rounded border border-black/10 bg-white px-1.5 py-1 font-mono text-[10px] outline-none dark:border-white/10 dark:bg-black/20" />
-          <button type="button" onClick={() => onChange(rules.filter((_, i) => i !== index))} className="text-text-muted hover:text-red-500" title="Remove tier">×</button>
-        </div>
-      ))}
-      {rules.length > 0 && <div className="grid grid-cols-[1.1fr_1fr_1fr_0.9fr_auto] gap-1 text-[9px] text-text-muted"><span>Up to tokens</span><span>Min ×</span><span>Max ×</span><span>Chance</span></div>}
-    </div>
-  );
-}
-
 // Inline editable model item with pricing and scheduling configuration
 function ModelItem({
   index,
@@ -70,13 +38,10 @@ function ModelItem({
   onMoveUp,
   onMoveDown,
   onRemove,
-  tokenRulePresets,
-  onSaveTokenRulePreset,
-  onDeleteTokenRulePreset,
 }) {
   const [editingName, setEditingName] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  const [activeTab, setActiveTab] = useState("pricing"); // "pricing" | "tokens" | "compress" | "schedule"
+  const [activeTab, setActiveTab] = useState("pricing"); // "pricing" | "compress" | "schedule"
 
   const modelName = typeof item === "object" ? item.model : item;
   const pricingType = (typeof item === "object" && (item.pricingType === "token" || item.pricingType === "input_token")) ? "token" : "request";
@@ -84,9 +49,6 @@ function ModelItem({
   const minPrice = (typeof item === "object" && item.minPrice !== null && item.minPrice !== undefined) ? item.minPrice : "";
   const maxInputTokens = (typeof item === "object" && item.maxInputTokens !== null && item.maxInputTokens !== undefined) ? item.maxInputTokens : "";
   const headroomMinInputTokens = (typeof item === "object" && item.headroomMinInputTokens !== null && item.headroomMinInputTokens !== undefined) ? item.headroomMinInputTokens : "";
-  const inputTokenRules = Array.isArray(item?.inputTokenRules) ? item.inputTokenRules : [];
-  const outputTokenRules = Array.isArray(item?.outputTokenRules) ? item.outputTokenRules : [];
-  const [presetName, setPresetName] = useState("");
 
   const timeSchedule = (typeof item === "object" && item.timeSchedule) || {
     enabled: false,
@@ -117,7 +79,6 @@ function ModelItem({
   const hasPrice = price !== "" && price !== null && price !== undefined && Number(price) >= 0;
   const hasMaxInputTokens = maxInputTokens !== "" && Number(maxInputTokens) > 0;
   const hasHeadroomThreshold = headroomMinInputTokens !== "" && Number(headroomMinInputTokens) > 0;
-  const hasTokenRules = inputTokenRules.length > 0 || outputTokenRules.length > 0;
   const priceLabel = hasPrice
     ? pricingType === "token"
       ? `$${price}/1M tok${minPrice !== "" && Number(minPrice) > 0 ? ` (min $${minPrice})` : ""}`
@@ -173,7 +134,7 @@ function ModelItem({
             className={`flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium transition-colors ${
               expanded
                 ? "bg-primary text-white shadow-xs"
-                : (hasPrice || hasMaxInputTokens || hasHeadroomThreshold || hasTokenRules || isScheduleEnabled)
+                : (hasPrice || hasMaxInputTokens || hasHeadroomThreshold || isScheduleEnabled)
                   ? "bg-primary/10 text-primary hover:bg-primary/20"
                   : "bg-black/5 text-text-muted hover:text-text-main hover:bg-black/10 dark:bg-white/5 dark:hover:bg-white/10"
             }`}
@@ -245,18 +206,6 @@ function ModelItem({
           </button>
         )}
 
-        {hasTokenRules && (
-          <button
-            type="button"
-            onClick={() => { setExpanded(true); setActiveTab("tokens"); }}
-            className="inline-flex items-center gap-1 rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-mono font-medium text-amber-600 hover:bg-amber-500/20 dark:text-amber-400"
-            title="Client response token multiplier"
-          >
-            <span className="material-symbols-outlined text-[11px]">functions</span>
-            <span>Tokens</span>
-          </button>
-        )}
-
         {hasHeadroomThreshold && (
           <button
             type="button"
@@ -299,18 +248,6 @@ function ModelItem({
               >
                 <span className="material-symbols-outlined text-[14px]">payments</span>
                 Pricing
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab("tokens")}
-                className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-colors ${
-                  activeTab === "tokens"
-                    ? "bg-primary/10 text-primary"
-                    : "text-text-muted hover:text-text-main"
-                }`}
-              >
-                <span className="material-symbols-outlined text-[14px]">functions</span>
-                Tokens
               </button>
               <button
                 type="button"
@@ -442,24 +379,6 @@ function ModelItem({
                   : "Fixed cost per request. Leave empty if unpriced (ranked last in Lowest Cost)."}
                 {" Max Input Tokens is optional; models below this capacity are deferred until compatible models fail."}
               </p>
-            </div>
-          )}
-
-          {activeTab === "tokens" && (
-            <div className="space-y-3">
-              <p className="text-[10px] text-text-muted">Only changes usage returned to the client. Input and output select their own tier from their actual upstream token count; reports and cost keep upstream usage.</p>
-              <div className="flex flex-wrap items-center gap-2">
-                <select defaultValue="" onChange={(e) => { const preset = tokenRulePresets.find((p) => p.id === e.target.value); if (preset) onEditConfig({ inputTokenRules: structuredClone(preset.inputTokenRules), outputTokenRules: structuredClone(preset.outputTokenRules) }); e.target.value = ""; }} className="rounded border border-black/10 bg-white px-2 py-1 text-[10px] dark:border-white/10 dark:bg-black/20">
-                  <option value="">Apply shared preset…</option>
-                  {tokenRulePresets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
-                </select>
-                <input value={presetName} onChange={(e) => setPresetName(e.target.value)} placeholder="Save current as preset" className="min-w-0 flex-1 rounded border border-black/10 bg-white px-2 py-1 text-[10px] outline-none dark:border-white/10 dark:bg-black/20" />
-                <button type="button" onClick={() => { if (presetName.trim()) { onSaveTokenRulePreset(presetName.trim(), inputTokenRules, outputTokenRules); setPresetName(""); } }} className="text-[10px] text-primary hover:underline">Save</button>
-              </div>
-              {tokenRulePresets.some((preset) => !preset.builtIn) && <div className="flex flex-wrap gap-1">{tokenRulePresets.filter((preset) => !preset.builtIn).map((preset) => <button type="button" key={preset.id} onClick={() => onDeleteTokenRulePreset(preset.id)} className="rounded bg-black/5 px-1.5 py-0.5 text-[9px] text-text-muted hover:text-red-500 dark:bg-white/5" title={`Delete ${preset.name}`}>× {preset.name}</button>)}</div>}
-              <TokenRuleEditor label="Input tiers" rules={inputTokenRules} onChange={(inputTokenRules) => onEditConfig({ inputTokenRules })} />
-              <TokenRuleEditor label="Output tiers" rules={outputTokenRules} onChange={(outputTokenRules) => onEditConfig({ outputTokenRules })} />
-              <p className="text-[9px] text-text-muted italic">Blank “Up to” means unlimited (the final tier). Max × blank means fixed at Min ×. Cache fields follow the selected input factor; totals are recalculated and rounded.</p>
             </div>
           )}
 
@@ -618,8 +537,6 @@ export default function ComboFormModal({ isOpen, combo, onClose, onSave, activeP
         minPrice: "",
         maxInputTokens: "",
         headroomMinInputTokens: "",
-        inputTokenRules: [],
-        outputTokenRules: [],
         timeSchedule: {
           enabled: false,
           startTime: "00:00",
@@ -634,8 +551,6 @@ export default function ComboFormModal({ isOpen, combo, onClose, onSave, activeP
       minPrice: m.minPrice !== undefined && m.minPrice !== null ? m.minPrice : "",
       maxInputTokens: m.maxInputTokens !== undefined && m.maxInputTokens !== null ? m.maxInputTokens : "",
       headroomMinInputTokens: m.headroomMinInputTokens !== undefined && m.headroomMinInputTokens !== null ? m.headroomMinInputTokens : "",
-      inputTokenRules: Array.isArray(m.inputTokenRules) ? m.inputTokenRules : [],
-      outputTokenRules: Array.isArray(m.outputTokenRules) ? m.outputTokenRules : [],
       timeSchedule: m.timeSchedule && typeof m.timeSchedule === "object" ? {
         enabled: !!m.timeSchedule.enabled,
         startTime: m.timeSchedule.startTime || "00:00",
@@ -654,13 +569,11 @@ export default function ComboFormModal({ isOpen, combo, onClose, onSave, activeP
   const [nameError, setNameError] = useState("");
   const [modelAliases, setModelAliases] = useState({});
   const [systemPricing, setSystemPricing] = useState({});
-  const [tokenRulePresets, setTokenRulePresets] = useState([]);
 
   useEffect(() => {
     if (!isOpen) return;
     fetch("/api/models/alias").then((r) => r.ok ? r.json() : null).then((d) => d && setModelAliases(d.aliases || {})).catch(() => {});
     fetch("/api/pricing").then((r) => r.ok ? r.json() : null).then((d) => d && setSystemPricing(d || {})).catch(() => {});
-    fetch("/api/combos/token-presets").then((r) => r.ok ? r.json() : null).then((d) => d && setTokenRulePresets(d.presets || [])).catch(() => {});
   }, [isOpen]);
 
   const validateName = (value) => {
@@ -689,8 +602,6 @@ export default function ComboFormModal({ isOpen, combo, onClose, onSave, activeP
         minPrice: "",
         maxInputTokens: "",
         headroomMinInputTokens: "",
-        inputTokenRules: [],
-        outputTokenRules: [],
         timeSchedule: {
           enabled: false,
           startTime: "00:00",
@@ -729,16 +640,6 @@ export default function ComboFormModal({ isOpen, combo, onClose, onSave, activeP
     setModels(a);
   };
 
-  const saveTokenRulePreset = async (presetName, inputTokenRules, outputTokenRules) => {
-    const response = await fetch("/api/combos/token-presets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: presetName, inputTokenRules, outputTokenRules }) });
-    if (response.ok) setTokenRulePresets((await response.json()).presets || []);
-  };
-
-  const deleteTokenRulePreset = async (id) => {
-    const response = await fetch("/api/combos/token-presets", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
-    if (response.ok) setTokenRulePresets((await response.json()).presets || []);
-  };
-
   const handleSave = async () => {
     if (!validateName(name)) return;
     setSaving(true);
@@ -751,8 +652,6 @@ export default function ComboFormModal({ isOpen, combo, onClose, onSave, activeP
       minPrice: m.minPrice !== "" && m.minPrice !== null && m.minPrice !== undefined ? parseFloat(m.minPrice) : null,
       maxInputTokens: m.maxInputTokens !== "" && m.maxInputTokens !== null && m.maxInputTokens !== undefined ? Math.floor(Number(m.maxInputTokens)) : null,
       headroomMinInputTokens: m.headroomMinInputTokens !== "" && m.headroomMinInputTokens !== null && m.headroomMinInputTokens !== undefined && Number(m.headroomMinInputTokens) > 0 ? Math.floor(Number(m.headroomMinInputTokens)) : null,
-      inputTokenRules: normalizeRulesForSave(m.inputTokenRules),
-      outputTokenRules: normalizeRulesForSave(m.outputTokenRules),
       timeSchedule: m.timeSchedule ? {
         enabled: !!m.timeSchedule.enabled,
         startTime: m.timeSchedule.startTime || "00:00",
@@ -819,9 +718,6 @@ export default function ComboFormModal({ isOpen, combo, onClose, onSave, activeP
                     onMoveUp={() => handleMoveUp(index)}
                     onMoveDown={() => handleMoveDown(index)}
                     onRemove={() => handleRemoveModel(index)}
-                    tokenRulePresets={tokenRulePresets}
-                    onSaveTokenRulePreset={saveTokenRulePreset}
-                    onDeleteTokenRulePreset={deleteTokenRulePreset}
                   />
                 ))}
               </div>

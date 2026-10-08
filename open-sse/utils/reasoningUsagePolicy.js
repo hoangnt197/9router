@@ -6,6 +6,7 @@ export const ZERO_REASONING_MAX_TOKENS = 512;
 // commonly spread/serialize the body before sending it upstream.
 const COMBO_MODEL_MARKER = "__shortlabComboModel";
 const COMBO_MODEL_TOKEN_RULES = "__shortlabComboTokenRules";
+const CLIENT_TOKEN_USAGE_POLICY = "__shortlabClientTokenUsagePolicy";
 // Capture the combo key at routing time. Provider executors may mutate
 // `body.model` in place, so it is not a reliable source during usage writes.
 const COMBO_ORIGINAL_NAME = "__shortlabOriginalComboName";
@@ -63,10 +64,25 @@ export function markComboModelRequest(body, modelItem = null, comboName = null) 
   return body;
 }
 
+/** Attach the API-key-owned presentation policy without forwarding it upstream. */
+export function markClientTokenUsagePolicy(body, policy = null) {
+  const input = normalizeTokenRules(policy?.input);
+  const output = normalizeTokenRules(policy?.output);
+  if (input.length || output.length) {
+    Object.defineProperty(body, CLIENT_TOKEN_USAGE_POLICY, {
+      value: { input, output }, enumerable: false,
+    });
+  }
+  return body;
+}
+
 export function preserveComboModelMarker(source, target) {
-  return source?.[COMBO_MODEL_MARKER] === true
+  const preserved = source?.[COMBO_MODEL_MARKER] === true
     ? markComboModelRequest(target, source?.[COMBO_MODEL_TOKEN_RULES], source?.[COMBO_ORIGINAL_NAME])
     : target;
+  return source?.[CLIENT_TOKEN_USAGE_POLICY]
+    ? markClientTokenUsagePolicy(preserved, source[CLIENT_TOKEN_USAGE_POLICY])
+    : preserved;
 }
 
 /**
@@ -131,11 +147,8 @@ export function createReasoningUsagePolicy(body, effectiveModel) {
  * Accounting must continue to use the original provider usage.
  */
 export function createClientTokenUsagePolicy(body) {
-  const item = body?.[COMBO_MODEL_TOKEN_RULES];
-  if (body?.[COMBO_MODEL_MARKER] !== true || !item || typeof item !== "object") return null;
-  const input = normalizeTokenRules(item.inputTokenRules);
-  const output = normalizeTokenRules(item.outputTokenRules);
-  return input.length || output.length ? { input, output } : null;
+  const policy = body?.[CLIENT_TOKEN_USAGE_POLICY];
+  return policy?.input?.length || policy?.output?.length ? policy : null;
 }
 
 function appliedTokenMultiplier(value, rules, random) {

@@ -15,6 +15,8 @@ const CAMEL_CASE_COLUMNS = {
   completiontokens: "completionTokens",
   datekey: "dateKey",
   apikey: "apiKey",
+  inputtokenrules: "inputTokenRules",
+  outputtokenrules: "outputTokenRules",
 };
 
 function mapRow(row) {

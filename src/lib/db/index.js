@@ -5,7 +5,7 @@ export { getSettings, updateSettings, isCloudEnabled, getCloudUrl, exportSetting
 export { getProviderConnections, getProviderConnectionById, createProviderConnection, updateProviderConnection, deleteProviderConnection, deleteProviderConnectionsByProvider, reorderProviderConnections, cleanupProviderConnections } from "./repos/connectionsRepo.js";
 export { getProviderNodes, getProviderNodeById, createProviderNode, updateProviderNode, deleteProviderNode } from "./repos/nodesRepo.js";
 export { getProxyPools, getProxyPoolById, createProxyPool, updateProxyPool, deleteProxyPool } from "./repos/proxyPoolsRepo.js";
-export { getApiKeys, getApiKeyById, createApiKey, updateApiKey, deleteApiKey, validateApiKey } from "./repos/apiKeysRepo.js";
+export { getApiKeys, getApiKeyById, createApiKey, updateApiKey, deleteApiKey, validateApiKey, getApiKeyTokenRules } from "./repos/apiKeysRepo.js";
 export { getCombos, getComboById, getComboByName, createCombo, updateCombo, deleteCombo } from "./repos/combosRepo.js";
 export { getModelAliases, setModelAlias, deleteModelAlias, getCustomModels, addCustomModel, deleteCustomModel, getMitmAlias, setMitmAliasAll } from "./repos/aliasRepo.js";
 export { getPricing, getPricingForModel, updatePricing, resetPricing, resetAllPricing } from "./repos/pricingRepo.js";

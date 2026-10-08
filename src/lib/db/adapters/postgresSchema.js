@@ -19,8 +19,11 @@ export const POSTGRES_SCHEMA_SQL = [
   )`,
   `CREATE TABLE IF NOT EXISTS apikeys (
     id TEXT PRIMARY KEY, key TEXT UNIQUE NOT NULL, name TEXT, machineid TEXT,
-    isactive INTEGER DEFAULT 1, createdat TEXT NOT NULL
+    isactive INTEGER DEFAULT 1, inputtokenrules TEXT NOT NULL DEFAULT '[]',
+    outputtokenrules TEXT NOT NULL DEFAULT '[]', createdat TEXT NOT NULL
   )`,
+  `ALTER TABLE apikeys ADD COLUMN IF NOT EXISTS inputtokenrules TEXT NOT NULL DEFAULT '[]'`,
+  `ALTER TABLE apikeys ADD COLUMN IF NOT EXISTS outputtokenrules TEXT NOT NULL DEFAULT '[]'`,
   `CREATE TABLE IF NOT EXISTS combos (
     id TEXT PRIMARY KEY, name TEXT UNIQUE NOT NULL, kind TEXT, models TEXT NOT NULL,
     createdat TEXT NOT NULL, updatedat TEXT NOT NULL

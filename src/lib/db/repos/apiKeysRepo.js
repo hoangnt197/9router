@@ -1,6 +1,8 @@
 import { v4 as uuidv4 } from "uuid";
 import { getAdapter } from "../driver.js";
 import { bumpSharedVersion, getSharedVersion } from "../../cluster/redisState.js";
+import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
+import { normalizeTokenRules } from "@/shared/tokenRules.js";
 
 function rowToKey(row) {
   if (!row) return null;
@@ -10,6 +12,8 @@ function rowToKey(row) {
     name: row.name,
     machineId: row.machineId,
     isActive: row.isActive === 1 || row.isActive === true,
+    inputTokenRules: normalizeTokenRules(parseJson(row.inputTokenRules, [])),
+    outputTokenRules: normalizeTokenRules(parseJson(row.outputTokenRules, [])),
     createdAt: row.createdAt,
   };
 }
@@ -68,16 +72,32 @@ export async function updateApiKey(id, data) {
   await db.transaction(async (tx) => {
     const row = await tx.get(`SELECT * FROM apiKeys WHERE id = ?`, [id]);
     if (!row) return;
-    const merged = { ...rowToKey(row), ...data };
+    const merged = {
+      ...rowToKey(row),
+      ...data,
+      inputTokenRules: data.inputTokenRules === undefined ? rowToKey(row).inputTokenRules : normalizeTokenRules(data.inputTokenRules),
+      outputTokenRules: data.outputTokenRules === undefined ? rowToKey(row).outputTokenRules : normalizeTokenRules(data.outputTokenRules),
+    };
     await tx.run(
-      `UPDATE apiKeys SET key = ?, name = ?, machineId = ?, isActive = ? WHERE id = ?`,
-      [merged.key, merged.name, merged.machineId, merged.isActive ? 1 : 0, id]
+      `UPDATE apiKeys SET key = ?, name = ?, machineId = ?, isActive = ?, inputTokenRules = ?, outputTokenRules = ? WHERE id = ?`,
+      [merged.key, merged.name, merged.machineId, merged.isActive ? 1 : 0, stringifyJson(merged.inputTokenRules), stringifyJson(merged.outputTokenRules), id]
     );
     result = merged;
   });
   apiKeyCacheVersion = await bumpSharedVersion("api-keys");
   invalidateApiKeyCache();
   return result;
+}
+
+/** Return the client token policy only for an active, stored API key. */
+export async function getApiKeyTokenRules(key) {
+  if (!key) return null;
+  const db = await getAdapter();
+  const row = await db.get(`SELECT isActive, inputTokenRules, outputTokenRules FROM apiKeys WHERE key = ?`, [key]);
+  if (!row || !(row.isActive === 1 || row.isActive === true)) return null;
+  const input = normalizeTokenRules(parseJson(row.inputTokenRules, []));
+  const output = normalizeTokenRules(parseJson(row.outputTokenRules, []));
+  return input.length || output.length ? { input, output } : null;
 }
 
 export async function deleteApiKey(id) {

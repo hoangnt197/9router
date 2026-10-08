@@ -7,7 +7,7 @@ import { unavailableResponse } from "../utils/error.js";
 import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { extractTextContent } from "../translator/formats/gemini.js";
 import { stripThinkingSuffix } from "../translator/concerns/thinkingUnified.js";
-import { markComboModelRequest, publicModelName } from "../utils/reasoningUsagePolicy.js";
+import { markComboModelRequest, preserveComboModelMarker, publicModelName } from "../utils/reasoningUsagePolicy.js";
 import { estimateInputTokens } from "../utils/inputTokenEstimator.js";
 import { nextDistributedCounter } from "../../src/lib/cluster/redisState.js";
 
@@ -598,7 +598,7 @@ export async function handleComboChat({
     log.info("COMBO", `Trying model ${i + 1}/${orderedModels.length}: ${modelStr}`);
 
     try {
-      const comboBody = { ...body, model: comboName || body?.model };
+      const comboBody = preserveComboModelMarker(body, { ...body, model: comboName || body?.model });
       // Internal-only marker for the final response policy. It is intentionally
       // non-enumerable so it cannot be translated or forwarded upstream.
       markComboModelRequest(comboBody, rawModel, comboName || body?.model);
@@ -726,7 +726,7 @@ function extractPanelText(json) {
  * Preserves the original conversation + system prompt so the judge has full context.
  */
 function appendUserTurn(body, text) {
-  const next = { ...body };
+  const next = preserveComboModelMarker(body, { ...body });
   if (Array.isArray(body.messages)) {
     next.messages = [...body.messages, { role: "user", content: text }];
   } else if (Array.isArray(body.input)) {

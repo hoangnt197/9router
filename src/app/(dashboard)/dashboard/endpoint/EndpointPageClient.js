@@ -18,6 +18,23 @@ import EndpointRow from "./components/EndpointRow";
 import StatusAlert from "./components/StatusAlert";
 import Tooltip from "./components/Tooltip";
 import SecurityWarning from "./components/SecurityWarning";
+
+function KeyTokenRuleEditor({ label, rules = [], onChange }) {
+  const update = (index, patch) => onChange(rules.map((rule, i) => i === index ? { ...rule, ...patch } : rule));
+  return <div className="space-y-1.5 rounded border border-black/5 p-2 dark:border-white/5">
+    <div className="flex items-center justify-between"><span className="text-xs font-medium">{label}</span><button type="button" onClick={() => onChange([...rules, { upTo: null, multiplierMin: 1, multiplierMax: "", chance: 100 }])} className="text-[10px] text-primary hover:underline">+ Add tier</button></div>
+    {rules.length === 0 && <p className="text-[10px] text-text-muted">No tiers configured.</p>}
+    {rules.map((rule, index) => <div key={index} className="grid grid-cols-[1.1fr_1fr_1fr_0.9fr_auto] gap-1">
+      <input type="number" min="1" step="1" placeholder="Unlimited" value={rule.upTo ?? ""} onChange={(e) => update(index, { upTo: e.target.value })} title="Blank means unlimited" className="min-w-0 rounded border border-black/10 bg-white px-1.5 py-1 font-mono text-[10px] outline-none dark:border-white/10 dark:bg-black/20" />
+      <input type="number" min="1" step="0.01" placeholder="Min ×" value={rule.multiplierMin ?? ""} onChange={(e) => update(index, { multiplierMin: e.target.value })} className="min-w-0 rounded border border-black/10 bg-white px-1.5 py-1 font-mono text-[10px] outline-none dark:border-white/10 dark:bg-black/20" />
+      <input type="number" min="1" step="0.01" placeholder="Max ×" value={rule.multiplierMax ?? ""} onChange={(e) => update(index, { multiplierMax: e.target.value })} className="min-w-0 rounded border border-black/10 bg-white px-1.5 py-1 font-mono text-[10px] outline-none dark:border-white/10 dark:bg-black/20" />
+      <input type="number" min="0" max="100" step="1" placeholder="100%" value={rule.chance ?? 100} onChange={(e) => update(index, { chance: e.target.value })} className="min-w-0 rounded border border-black/10 bg-white px-1.5 py-1 font-mono text-[10px] outline-none dark:border-white/10 dark:bg-black/20" />
+      <button type="button" onClick={() => onChange(rules.filter((_, i) => i !== index))} className="text-text-muted hover:text-red-500" title="Remove tier">×</button>
+    </div>)}
+    {rules.length > 0 && <div className="grid grid-cols-[1.1fr_1fr_1fr_0.9fr_auto] gap-1 text-[9px] text-text-muted"><span>Up to tokens</span><span>Min ×</span><span>Max ×</span><span>Chance</span></div>}
+  </div>;
+}
+
 export default function APIPageClient({ machineId }) {
   const [keys, setKeys] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -77,6 +94,9 @@ export default function APIPageClient({ machineId }) {
 
   // API key visibility toggle state
   const [visibleKeys, setVisibleKeys] = useState(new Set());
+  const [expandedTokenKeyId, setExpandedTokenKeyId] = useState(null);
+  const [tokenRulePresets, setTokenRulePresets] = useState([]);
+  const [presetName, setPresetName] = useState("");
 
   // Client-side local/remote detection (UI hint only, not a security gate)
   const [isRemoteHost, setIsRemoteHost] = useState(false);
@@ -255,6 +275,10 @@ export default function APIPageClient({ machineId }) {
       };
 
       let existing = await fetchKeys();
+      fetch("/api/combos/token-presets")
+        .then((res) => res.ok ? res.json() : null)
+        .then((data) => data && setTokenRulePresets(data.presets || []))
+        .catch(() => {});
       // Auto-provision a default key for first-time users so the endpoint works out of the box.
       if (existing.length === 0) {
         try {
@@ -674,6 +698,33 @@ export default function APIPageClient({ machineId }) {
     }
   };
 
+  const updateKeyTokenRules = async (id, inputTokenRules, outputTokenRules) => {
+    const res = await fetch(`/api/keys/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ inputTokenRules, outputTokenRules }),
+    });
+    if (res.ok) {
+      const { key } = await res.json();
+      setKeys((current) => current.map((item) => item.id === id ? key : item));
+    }
+  };
+
+  const saveTokenRulePreset = async (name, inputTokenRules, outputTokenRules) => {
+    const res = await fetch("/api/combos/token-presets", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, inputTokenRules, outputTokenRules }),
+    });
+    if (res.ok) setTokenRulePresets((await res.json()).presets || []);
+  };
+
+  const deleteTokenRulePreset = async (id) => {
+    const res = await fetch("/api/combos/token-presets", {
+      method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }),
+    });
+    if (res.ok) setTokenRulePresets((await res.json()).presets || []);
+  };
+
   const maskKey = (fullKey) => {
     if (!fullKey || fullKey.length <= 10) return fullKey || "";
     return fullKey.slice(0, 6) + "•".repeat(fullKey.length - 10) + fullKey.slice(-4);
@@ -1002,8 +1053,9 @@ export default function APIPageClient({ machineId }) {
             {keys.map((key) => (
               <div
                 key={key.id}
-                className={`group flex items-center justify-between py-3 border-b border-black/[0.03] dark:border-white/[0.03] last:border-b-0 ${key.isActive === false ? "opacity-60" : ""}`}
+                className={`group flex flex-col border-b border-black/[0.03] py-3 dark:border-white/[0.03] last:border-b-0 ${key.isActive === false ? "opacity-60" : ""}`}
               >
+                <div className="flex items-center justify-between gap-3">
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium">{key.name}</p>
                   <div className="flex items-center gap-2 mt-1">
@@ -1036,6 +1088,9 @@ export default function APIPageClient({ machineId }) {
                   )}
                 </div>
                 <div className="flex items-center gap-2">
+                  <button onClick={() => setExpandedTokenKeyId(expandedTokenKeyId === key.id ? null : key.id)} className="p-2 rounded text-text-muted hover:bg-primary/10 hover:text-primary" title="Token usage rules">
+                    <span className="material-symbols-outlined text-[18px]">functions</span>
+                  </button>
                   <Toggle
                     size="sm"
                     checked={key.isActive ?? true}
@@ -1062,6 +1117,24 @@ export default function APIPageClient({ machineId }) {
                     <span className="material-symbols-outlined text-[18px]">delete</span>
                   </button>
                 </div>
+                </div>
+                {expandedTokenKeyId === key.id && <div className="mt-3 rounded-md bg-black/[0.02] p-3 dark:bg-white/[0.03]">
+                  <p className="mb-2 text-[11px] text-text-muted">Only changes usage returned to clients using this API key. Input/output tiers use their own upstream token count; dashboard cost remains upstream usage.</p>
+                  <div className="mb-3 flex flex-wrap items-center gap-2">
+                    <select defaultValue="" onChange={(e) => { const preset = tokenRulePresets.find((item) => item.id === e.target.value); if (preset) updateKeyTokenRules(key.id, preset.inputTokenRules, preset.outputTokenRules); e.target.value = ""; }} className="rounded border border-black/10 bg-white px-2 py-1 text-[10px] dark:border-white/10 dark:bg-black/20">
+                      <option value="">Apply shared preset…</option>
+                      {tokenRulePresets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
+                    </select>
+                    <input value={presetName} onChange={(e) => setPresetName(e.target.value)} placeholder="Save current as preset" className="min-w-0 flex-1 rounded border border-black/10 bg-white px-2 py-1 text-[10px] outline-none dark:border-white/10 dark:bg-black/20" />
+                    <button type="button" onClick={() => { if (presetName.trim()) { saveTokenRulePreset(presetName.trim(), key.inputTokenRules || [], key.outputTokenRules || []); setPresetName(""); } }} className="text-[10px] text-primary hover:underline">Save</button>
+                  </div>
+                  {tokenRulePresets.length > 0 && <div className="mb-3 flex flex-wrap gap-1">{tokenRulePresets.map((preset) => <button type="button" key={preset.id} onClick={() => deleteTokenRulePreset(preset.id)} className="rounded bg-black/5 px-1.5 py-0.5 text-[9px] text-text-muted hover:text-red-500 dark:bg-white/5" title={`Delete ${preset.name}`}>× {preset.name}</button>)}</div>}
+                  <div className="space-y-2">
+                    <KeyTokenRuleEditor label="Input tiers" rules={key.inputTokenRules || []} onChange={(inputTokenRules) => setKeys((current) => current.map((item) => item.id === key.id ? { ...item, inputTokenRules } : item))} />
+                    <KeyTokenRuleEditor label="Output tiers" rules={key.outputTokenRules || []} onChange={(outputTokenRules) => setKeys((current) => current.map((item) => item.id === key.id ? { ...item, outputTokenRules } : item))} />
+                    <div className="flex justify-end"><Button size="sm" onClick={() => updateKeyTokenRules(key.id, key.inputTokenRules || [], key.outputTokenRules || [])}>Save token rules</Button></div>
+                  </div>
+                </div>}
               </div>
             ))}
           </div>
