@@ -3,6 +3,8 @@ import { getAdapter } from "../driver.js";
 import { bumpSharedVersion, getSharedVersion } from "../../cluster/redisState.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
 import { normalizeTokenRules } from "@/shared/tokenRules.js";
+import { keyAccessFromColumns, keyAccessToColumns } from "@/shared/utils/keyAccess.js";
+import { KEY_ACCESS_UNRESTRICTED } from "@/shared/constants/keyAccess.js";
 
 function rowToKey(row) {
   if (!row) return null;
@@ -28,6 +30,13 @@ export async function getApiKeys() {
 export async function getApiKeyById(id) {
   const db = await getAdapter();
   const row = await db.get(`SELECT * FROM apiKeys WHERE id = ?`, [id]);
+  return rowToKey(row);
+}
+
+export async function getApiKeyByKey(key) {
+  if (!key) return null;
+  const db = await getAdapter();
+  const row = await db.get(`SELECT * FROM apiKeys WHERE key = ?`, [key]);
   return rowToKey(row);
 }
 
@@ -57,11 +66,12 @@ export async function createApiKey(name, machineId) {
     machineId,
     isActive: true,
     createdAt: new Date().toISOString(),
-    access: { restricted: false, allow: [] },
+    access: KEY_ACCESS_UNRESTRICTED,
   };
+  const accessColumns = keyAccessToColumns(KEY_ACCESS_UNRESTRICTED);
   await db.run(
-    `INSERT INTO apiKeys(id, key, name, machineId, isActive, createdAt) VALUES(?, ?, ?, ?, ?, ?)`,
-    [apiKey.id, apiKey.key, apiKey.name, apiKey.machineId, 1, apiKey.createdAt]
+    `INSERT INTO apiKeys(id, key, name, machineId, isActive, createdAt, accessRestricted, accessAllow) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+    [apiKey.id, apiKey.key, apiKey.name, apiKey.machineId, 1, apiKey.createdAt, accessColumns.accessRestricted, accessColumns.accessAllow]
   );
   apiKeyCacheVersion = await bumpSharedVersion("api-keys");
   invalidateApiKeyCache();
@@ -77,14 +87,16 @@ export async function updateApiKey(id, data) {
     const merged = {
       ...rowToKey(row),
       ...data,
+      access: data.access === undefined ? rowToKey(row).access : data.access,
       inputTokenRules: data.inputTokenRules === undefined ? rowToKey(row).inputTokenRules : normalizeTokenRules(data.inputTokenRules),
       outputTokenRules: data.outputTokenRules === undefined ? rowToKey(row).outputTokenRules : normalizeTokenRules(data.outputTokenRules),
     };
+    const accessColumns = keyAccessToColumns(merged.access);
     await tx.run(
-      `UPDATE apiKeys SET key = ?, name = ?, machineId = ?, isActive = ?, inputTokenRules = ?, outputTokenRules = ? WHERE id = ?`,
-      [merged.key, merged.name, merged.machineId, merged.isActive ? 1 : 0, stringifyJson(merged.inputTokenRules), stringifyJson(merged.outputTokenRules), id]
+      `UPDATE apiKeys SET key = ?, name = ?, machineId = ?, isActive = ?, inputTokenRules = ?, outputTokenRules = ?, accessRestricted = ?, accessAllow = ? WHERE id = ?`,
+      [merged.key, merged.name, merged.machineId, merged.isActive ? 1 : 0, stringifyJson(merged.inputTokenRules), stringifyJson(merged.outputTokenRules), accessColumns.accessRestricted, accessColumns.accessAllow, id]
     );
-    result = rowToKey(db.get(`SELECT * FROM apiKeys WHERE id = ?`, [id]));
+    result = rowToKey(await tx.get(`SELECT * FROM apiKeys WHERE id = ?`, [id]));
   });
   apiKeyCacheVersion = await bumpSharedVersion("api-keys");
   invalidateApiKeyCache();
