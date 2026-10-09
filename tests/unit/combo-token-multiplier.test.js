@@ -11,8 +11,8 @@ function policy({ input = [{ upTo: null, multiplierMin: 2, multiplierMax: 2, cha
   return createClientTokenUsagePolicy(body);
 }
 
-describe("combo client token multiplier", () => {
-  it("scales only non-cached OpenAI input and keeps cache details unchanged", () => {
+describe("API-key client token multiplier", () => {
+  it("scales the full OpenAI input total and keeps cache details unchanged", () => {
     const payload = {
       usage: {
         prompt_tokens: 100,
@@ -26,15 +26,15 @@ describe("combo client token multiplier", () => {
     applyClientTokenUsagePolicy(payload, policy(), () => 0);
 
     expect(payload.usage).toEqual({
-      prompt_tokens: 115,
+      prompt_tokens: 200,
       completion_tokens: 30,
-      total_tokens: 145,
+      total_tokens: 230,
       cached_tokens: 80,
       prompt_tokens_details: { cached_tokens: 80, cache_creation_tokens: 5 },
     });
   });
 
-  it("scales only non-cached Responses input and creates a consistent total", () => {
+  it("scales the full Responses input total and keeps cache details unchanged", () => {
     const payload = {
       object: "response",
       usage: {
@@ -47,14 +47,14 @@ describe("combo client token multiplier", () => {
     applyClientTokenUsagePolicy(payload, policy(), () => 0);
 
     expect(payload.usage).toEqual({
-      input_tokens: 120,
+      input_tokens: 200,
       output_tokens: 30,
-      total_tokens: 150,
+      total_tokens: 230,
       input_tokens_details: { cached_tokens: 80 },
     });
   });
 
-  it("keeps Claude cache read/write unchanged and uses them for the input tier cap", () => {
+  it("scales Claude's cache-inclusive total while preserving separate cache counts", () => {
     const payload = {
       type: "message",
       usage: {
@@ -68,7 +68,7 @@ describe("combo client token multiplier", () => {
     applyClientTokenUsagePolicy(payload, policy({ input: [{ upTo: 220, multiplierMin: 2, multiplierMax: 2, chance: 100 }] }), () => 0);
 
     expect(payload.usage).toEqual({
-      input_tokens: 40,
+      input_tokens: 125,
       output_tokens: 30,
       cache_read_input_tokens: 80,
       cache_creation_input_tokens: 5,
@@ -76,7 +76,7 @@ describe("combo client token multiplier", () => {
     expect(payload.usage).not.toHaveProperty("total_tokens");
   });
 
-  it("scales only non-cached Gemini input and includes thoughts in total", () => {
+  it("scales the full Gemini input total, preserves cache, and includes thoughts in total", () => {
     const payload = {
       response: {
         usageMetadata: {
@@ -92,9 +92,9 @@ describe("combo client token multiplier", () => {
     applyClientTokenUsagePolicy(payload, policy(), () => 0);
 
     expect(payload.response.usageMetadata).toEqual({
-      promptTokenCount: 120,
+      promptTokenCount: 200,
       candidatesTokenCount: 30,
-      totalTokenCount: 157,
+      totalTokenCount: 237,
       cachedContentTokenCount: 80,
       thoughtsTokenCount: 7,
     });

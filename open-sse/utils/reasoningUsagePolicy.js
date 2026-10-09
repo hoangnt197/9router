@@ -178,14 +178,16 @@ function inputCacheTokens(usage) {
 
 function scaledInputValue(usage, inputKey, input, multiplier) {
   if (!Number.isFinite(input)) return input;
-  // Claude reports cache read/write as separate prompt tokens, outside
-  // input_tokens. Other supported formats report cache as a subset of input.
+  // Tier multipliers apply to the full upstream input total, including cache.
+  // Cache counters themselves stay unchanged. Claude reports those counters
+  // separately, so subtract them back out of input_tokens after scaling total.
   const cacheIsSeparate = inputKey === "input_tokens"
     && usage.input_tokens_details === undefined
     && (usage.cache_read_input_tokens !== undefined || usage.cache_creation_input_tokens !== undefined);
-  const cache = cacheIsSeparate ? 0 : Math.min(input, inputCacheTokens(usage));
-  const nonCached = Math.max(0, input - cache);
-  return cache + Math.round(nonCached * multiplier);
+  const scaledTotal = Math.round(inputMultiplierBasis(usage, inputKey, input) * multiplier);
+  return cacheIsSeparate
+    ? Math.max(0, scaledTotal - inputCacheTokens(usage))
+    : scaledTotal;
 }
 
 function inputMultiplierBasis(usage, inputKey, input) {
