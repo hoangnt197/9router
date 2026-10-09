@@ -222,11 +222,23 @@ export default function ModelSelectModal({
     // key, so gating on connections hides models the user already added. These nodes
     // are LLM-only, so only surface them when no kind filter is active.
     // See #4177, #2113, #2119, #1988.
+    // Custom model records are intentionally retained when a compatible node is
+    // deleted, but they must not resurrect that deleted node in the picker.
+    // Provider nodes are the source of truth for whether a compatible provider
+    // still exists; connections are optional for local/self-hosted endpoints.
+    const existingCompatibleNodeIds = new Set(
+      providerNodes
+        .filter((node) => isOpenAICompatibleProvider(node.id) || isAnthropicCompatibleProvider(node.id))
+        .map((node) => node.id)
+    );
     const compatibleNodeIds = kindFilter
       ? []
       : customModels
           .map((m) => m.providerAlias)
-          .filter((alias) => isOpenAICompatibleProvider(alias) || isAnthropicCompatibleProvider(alias));
+          .filter((alias) =>
+            existingCompatibleNodeIds.has(alias) &&
+            (isOpenAICompatibleProvider(alias) || isAnthropicCompatibleProvider(alias))
+          );
 
     // Only show connected providers (including both standard and custom)
     const providerIdsToShow = new Set([
