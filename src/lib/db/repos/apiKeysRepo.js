@@ -15,6 +15,7 @@ function rowToKey(row) {
     inputTokenRules: normalizeTokenRules(parseJson(row.inputTokenRules, [])),
     outputTokenRules: normalizeTokenRules(parseJson(row.outputTokenRules, [])),
     createdAt: row.createdAt,
+    access: keyAccessFromColumns(row.accessRestricted, row.accessAllow),
   };
 }
 
@@ -56,6 +57,7 @@ export async function createApiKey(name, machineId) {
     machineId,
     isActive: true,
     createdAt: new Date().toISOString(),
+    access: { restricted: false, allow: [] },
   };
   await db.run(
     `INSERT INTO apiKeys(id, key, name, machineId, isActive, createdAt) VALUES(?, ?, ?, ?, ?, ?)`,
@@ -82,7 +84,7 @@ export async function updateApiKey(id, data) {
       `UPDATE apiKeys SET key = ?, name = ?, machineId = ?, isActive = ?, inputTokenRules = ?, outputTokenRules = ? WHERE id = ?`,
       [merged.key, merged.name, merged.machineId, merged.isActive ? 1 : 0, stringifyJson(merged.inputTokenRules), stringifyJson(merged.outputTokenRules), id]
     );
-    result = merged;
+    result = rowToKey(db.get(`SELECT * FROM apiKeys WHERE id = ?`, [id]));
   });
   apiKeyCacheVersion = await bumpSharedVersion("api-keys");
   invalidateApiKeyCache();
