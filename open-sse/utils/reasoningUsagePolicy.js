@@ -162,20 +162,30 @@ function appliedTokenMultiplier(value, rules, random) {
   return multiplier > 1 ? multiplier : 1;
 }
 
-function scaleTokenField(target, key, multiplier) {
-  if (!target || multiplier <= 1 || !Number.isFinite(Number(target[key]))) return;
-  target[key] = Math.round(Number(target[key]) * multiplier);
+function inputCacheTokens(usage) {
+  const cached = usage.input_tokens_details?.cached_tokens
+    ?? usage.prompt_tokens_details?.cached_tokens
+    ?? usage.cached_tokens
+    ?? usage.cache_read_input_tokens
+    ?? usage.cachedContentTokenCount
+    ?? 0;
+  const cacheWrite = usage.input_tokens_details?.cache_creation_tokens
+    ?? usage.prompt_tokens_details?.cache_creation_tokens
+    ?? usage.cache_creation_input_tokens
+    ?? 0;
+  return Math.max(0, Number(cached) || 0) + Math.max(0, Number(cacheWrite) || 0);
 }
 
-function scaleInputCacheBreakdown(usage, multiplier) {
-  if (multiplier <= 1) return;
-  scaleTokenField(usage, "cached_tokens", multiplier);
-  scaleTokenField(usage, "cache_read_input_tokens", multiplier);
-  scaleTokenField(usage, "cache_creation_input_tokens", multiplier);
-  scaleTokenField(usage.prompt_tokens_details, "cached_tokens", multiplier);
-  scaleTokenField(usage.prompt_tokens_details, "cache_creation_tokens", multiplier);
-  scaleTokenField(usage.input_tokens_details, "cached_tokens", multiplier);
-  scaleTokenField(usage, "cachedContentTokenCount", multiplier);
+function scaledInputValue(usage, inputKey, input, multiplier) {
+  if (!Number.isFinite(input)) return input;
+  // Claude reports cache read/write as separate prompt tokens, outside
+  // input_tokens. Other supported formats report cache as a subset of input.
+  const cacheIsSeparate = inputKey === "input_tokens"
+    && usage.input_tokens_details === undefined
+    && (usage.cache_read_input_tokens !== undefined || usage.cache_creation_input_tokens !== undefined);
+  const cache = cacheIsSeparate ? 0 : Math.min(input, inputCacheTokens(usage));
+  const nonCached = Math.max(0, input - cache);
+  return cache + Math.round(nonCached * multiplier);
 }
 
 function inputMultiplierBasis(usage, inputKey, input) {
@@ -210,12 +220,10 @@ function applyUsageMultiplier(usage, inputKey, outputKey, totalKey, policy, rand
   const output = Number(usage[outputKey]);
   const inputMultiplier = appliedTokenMultiplier(inputMultiplierBasis(usage, inputKey, input), policy?.input, random);
   const outputMultiplier = appliedTokenMultiplier(output, policy?.output, random);
-  const nextInput = Number.isFinite(input) ? Math.round(input * inputMultiplier) : input;
+  const nextInput = scaledInputValue(usage, inputKey, input, inputMultiplier);
   const nextOutput = Number.isFinite(output) ? Math.round(output * outputMultiplier) : output;
   if (Number.isFinite(nextInput)) usage[inputKey] = nextInput;
   if (Number.isFinite(nextOutput)) usage[outputKey] = nextOutput;
-  scaleInputCacheBreakdown(usage, inputMultiplier);
-
   if (options.recalculateTotal && Number.isFinite(nextInput) && Number.isFinite(nextOutput)) {
     const extraTokens = [...inputUsageExtraKeys(usage, inputKey), ...(options.totalExtraKeys || [])]
       .reduce((sum, key) => sum + (Number(usage[key]) || 0), 0);
@@ -223,7 +231,7 @@ function applyUsageMultiplier(usage, inputKey, outputKey, totalKey, policy, rand
   }
 }
 
-/** Apply combo token presentation rules only to the payload that goes to the client. */
+/** Apply API-key token presentation rules only to the payload that goes to the client. */
 export function applyClientTokenUsagePolicy(payload, policy, random = Math.random) {
   if (!policy || !payload || typeof payload !== "object") return payload;
   const target = payload.response && typeof payload.response === "object" ? payload.response : payload;
