@@ -93,6 +93,10 @@ export async function handleChat(request, clientRawRequest = null) {
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Missing model");
   }
 
+  const keyAccess = await getKeyAccessContext(request);
+  const keyAccessDenied = await enforceKeyAccess(keyAccess, modelStr);
+  if (keyAccessDenied) return keyAccessDenied;
+
   // Check cyber abuse blocking rules (Shortlab Cyber Filter)
   if (settings.enableCyberFilter !== false) {
     const blockingRule = checkBlockingRule(body);
