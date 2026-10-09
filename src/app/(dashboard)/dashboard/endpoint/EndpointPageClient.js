@@ -18,6 +18,7 @@ import EndpointRow from "./components/EndpointRow";
 import StatusAlert from "./components/StatusAlert";
 import Tooltip from "./components/Tooltip";
 import SecurityWarning from "./components/SecurityWarning";
+import KeyAccessControls from "./components/KeyAccessControls";
 
 function KeyTokenRuleEditor({ label, rules = [], onChange }) {
   const update = (index, patch) => onChange(rules.map((rule, i) => i === index ? { ...rule, ...patch } : rule));
