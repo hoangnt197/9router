@@ -64,8 +64,8 @@ COPY --from=builder /app/node_modules/next ./node_modules/next
 # node-machine-id is createRequire-loaded at runtime; tracing omits it.
 COPY --from=builder /app/node_modules/node-machine-id ./node_modules/node-machine-id
 
-RUN mkdir -p /app/data && chown -R node:node /app && \
-  mkdir -p /app/data-home && chown node:node /app/data-home && \
+RUN mkdir -p /app/data /app/data-home /app/.next/cache && \
+  chown node:node /app/data /app/data-home /app/.next/cache && \
   ln -sf /app/data-home /root/.9router 2>/dev/null || true
 
 # Avoid a full distribution upgrade in the runtime image. It makes builds less
