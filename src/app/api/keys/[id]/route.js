@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { deleteApiKey, getApiKeyById, updateApiKey } from "@/lib/localDb";
 import { normalizeTokenRules } from "@/shared/tokenRules.js";
+import { validateKeyAccessInput } from "@/shared/utils/keyAccess.js";
 
 // GET /api/keys/[id] - Get single key
 export async function GET(request, { params }) {
@@ -22,7 +23,7 @@ export async function PUT(request, { params }) {
   try {
     const { id } = await params;
     const body = await request.json();
-    const { isActive, inputTokenRules, outputTokenRules } = body;
+    const { isActive, inputTokenRules, outputTokenRules, access } = body;
 
     const existing = await getApiKeyById(id);
     if (!existing) {
@@ -33,6 +34,13 @@ export async function PUT(request, { params }) {
     if (isActive !== undefined) updateData.isActive = isActive;
     if (inputTokenRules !== undefined) updateData.inputTokenRules = normalizeTokenRules(inputTokenRules);
     if (outputTokenRules !== undefined) updateData.outputTokenRules = normalizeTokenRules(outputTokenRules);
+    if (access !== undefined) {
+      const validatedAccess = validateKeyAccessInput(access);
+      if (!validatedAccess.ok) {
+        return NextResponse.json({ error: validatedAccess.error }, { status: 400 });
+      }
+      updateData.access = validatedAccess.value;
+    }
 
     const updated = await updateApiKey(id, updateData);
 

@@ -699,6 +699,24 @@ export default function APIPageClient({ machineId }) {
     }
   };
 
+  const handleUpdateKeyAccess = async (id, access) => {
+    const previous = keys.find((key) => key.id === id)?.access;
+    setKeys((current) => current.map((key) => key.id === id ? { ...key, access } : key));
+    try {
+      const res = await fetch(`/api/keys/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ access }),
+      });
+      if (!res.ok) throw new Error(`Failed to update key access (${res.status})`);
+      const { key } = await res.json();
+      setKeys((current) => current.map((item) => item.id === id ? key : item));
+    } catch (error) {
+      setKeys((current) => current.map((key) => key.id === id ? { ...key, access: previous || { restricted: false, allow: [] } } : key));
+      console.log("Error updating key access:", error);
+    }
+  };
+
   const updateKeyTokenRules = async (id, inputTokenRules, outputTokenRules) => {
     const res = await fetch(`/api/keys/${id}`, {
       method: "PUT",
