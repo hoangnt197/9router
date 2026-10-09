@@ -17,6 +17,8 @@ const CAMEL_CASE_COLUMNS = {
   apikey: "apiKey",
   inputtokenrules: "inputTokenRules",
   outputtokenrules: "outputTokenRules",
+  accessrestricted: "accessRestricted",
+  accessallow: "accessAllow",
 };
 
 function mapRow(row) {

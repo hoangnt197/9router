@@ -19,9 +19,12 @@ export const POSTGRES_SCHEMA_SQL = [
   )`,
   `CREATE TABLE IF NOT EXISTS apikeys (
     id TEXT PRIMARY KEY, key TEXT UNIQUE NOT NULL, name TEXT, machineid TEXT,
-    isactive INTEGER DEFAULT 1, inputtokenrules TEXT NOT NULL DEFAULT '[]',
+    isactive INTEGER DEFAULT 1, accessrestricted INTEGER NOT NULL DEFAULT 0,
+    accessallow TEXT NOT NULL DEFAULT '[]', inputtokenrules TEXT NOT NULL DEFAULT '[]',
     outputtokenrules TEXT NOT NULL DEFAULT '[]', createdat TEXT NOT NULL
   )`,
+  `ALTER TABLE apikeys ADD COLUMN IF NOT EXISTS accessrestricted INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE apikeys ADD COLUMN IF NOT EXISTS accessallow TEXT NOT NULL DEFAULT '[]'`,
   `ALTER TABLE apikeys ADD COLUMN IF NOT EXISTS inputtokenrules TEXT NOT NULL DEFAULT '[]'`,
   `ALTER TABLE apikeys ADD COLUMN IF NOT EXISTS outputtokenrules TEXT NOT NULL DEFAULT '[]'`,
   `CREATE TABLE IF NOT EXISTS combos (
