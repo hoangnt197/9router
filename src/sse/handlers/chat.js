@@ -85,8 +85,10 @@ export async function handleChat(request, clientRawRequest = null) {
   }
 
   // Token presentation is owned by the caller's API key, never by the routed
-  // model/combo. The non-enumerable marker survives internal copies only.
-  if (apiKey) markClientTokenUsagePolicy(body, await getApiKeyTokenRules(apiKey));
+  // model/combo. Keep it explicit as well as on the private marker because
+  // some internal branches clone request bodies.
+  const clientTokenUsagePolicy = apiKey ? await getApiKeyTokenRules(apiKey) : null;
+  if (clientTokenUsagePolicy) markClientTokenUsagePolicy(body, clientTokenUsagePolicy);
 
   if (!modelStr) {
     log.warn("CHAT", "Missing model");
@@ -298,6 +300,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       // Retain the non-enumerable combo marker across this internal copy. It is
       // consumed only by response usage policy and never reaches the provider.
       body: preserveComboModelMarker(body, { ...body, model: body.model || `${provider}/${model}` }),
+      clientTokenUsagePolicy,
       modelInfo: { provider, model },
       credentials: refreshedCredentials,
       log,

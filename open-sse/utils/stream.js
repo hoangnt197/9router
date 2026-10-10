@@ -55,7 +55,8 @@ export function createSSEStream(options = {}) {
     apiKey = null,
     credentials = null,
     earlyStreamCutoff = false,
-    onEarlyTerminal = null
+    onEarlyTerminal = null,
+    clientTokenUsagePolicy = null
   } = options;
 
   let buffer = "";
@@ -78,7 +79,7 @@ export function createSSEStream(options = {}) {
   // `model` remains the public name, while policyModel preserves an internal
   // combo suffix such as `(low)` for policy evaluation.
   const responsePolicy = createReasoningUsagePolicy(body, policyModel || model);
-  const clientTokenUsagePolicy = createClientTokenUsagePolicy(body);
+  const resolvedClientTokenUsagePolicy = clientTokenUsagePolicy || createClientTokenUsagePolicy(body);
   const eventTypeCounts = {};
 
   // Track Responses API event framing for same-format passthrough (codex)
@@ -268,7 +269,7 @@ export function createSSEStream(options = {}) {
                 // Keep usage recorded to the report unscaled; only mutate the
                 // response sent to the client after retaining the raw value.
                 usage = earlyStreamCutoff ? estimateUsageWithoutBuffer(body, totalContentLength, sourceFormat) : (extractUsage(parsed) || usage);
-                applyClientTokenUsagePolicy(parsed, clientTokenUsagePolicy);
+              applyClientTokenUsagePolicy(parsed, resolvedClientTokenUsagePolicy);
               }
             } catch {
               // Skip non-JSON data lines silently — don't forward garbage to clients.
@@ -412,7 +413,7 @@ export function createSSEStream(options = {}) {
           applyResponsePolicy(parsed, responsePolicy);
           const adjustedUsage = extractUsage(parsed);
           if (!earlyStreamCutoff && adjustedUsage) state.usage = adjustedUsage;
-          applyClientTokenUsagePolicy(parsed, clientTokenUsagePolicy);
+          applyClientTokenUsagePolicy(parsed, resolvedClientTokenUsagePolicy);
           const output = formatSSE({ event: openAIResponsesEventName, data: parsed }, sourceFormat);
           reqLogger?.appendConvertedChunk?.(output);
           controller.enqueue(sharedEncoder.encode(output));
@@ -464,7 +465,7 @@ export function createSSEStream(options = {}) {
             if (state.finishReason && isFinishChunk) {
               const adjustedUsage = extractUsage(item);
               if (!earlyStreamCutoff && adjustedUsage) state.usage = adjustedUsage;
-              applyClientTokenUsagePolicy(item, clientTokenUsagePolicy);
+              applyClientTokenUsagePolicy(item, resolvedClientTokenUsagePolicy);
             }
 
             const output = formatSSE(item, sourceFormat);
@@ -570,7 +571,7 @@ export function createSSEStream(options = {}) {
           for (const item of flushed) {
             if (item === null || item === undefined) continue;
             applyResponsePolicy(item, responsePolicy);
-            applyClientTokenUsagePolicy(item, clientTokenUsagePolicy);
+            applyClientTokenUsagePolicy(item, resolvedClientTokenUsagePolicy);
             const output = formatSSE(item, sourceFormat);
             reqLogger?.appendConvertedChunk?.(output);
             controller.enqueue(sharedEncoder.encode(output));
@@ -603,7 +604,7 @@ export function createSSEStream(options = {}) {
   });
 }
 
-export function createSSETransformStreamWithLogger(targetFormat, sourceFormat, provider = null, reqLogger = null, toolNameMap = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null, customToolNames = null, credentialsOrPolicyModel = null, maybePolicyModel = null, earlyStreamCutoff = false, onEarlyTerminal = null) {
+export function createSSETransformStreamWithLogger(targetFormat, sourceFormat, provider = null, reqLogger = null, toolNameMap = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null, customToolNames = null, credentialsOrPolicyModel = null, maybePolicyModel = null, earlyStreamCutoff = false, onEarlyTerminal = null, clientTokenUsagePolicy = null) {
   let credentials = credentialsOrPolicyModel && typeof credentialsOrPolicyModel === "object" ? credentialsOrPolicyModel : null;
   let policyModel = maybePolicyModel || (typeof credentialsOrPolicyModel === "string" ? credentialsOrPolicyModel : null);
   return createSSEStream({
@@ -622,11 +623,12 @@ export function createSSETransformStreamWithLogger(targetFormat, sourceFormat, p
     apiKey,
     credentials,
     earlyStreamCutoff,
-    onEarlyTerminal
+    onEarlyTerminal,
+    clientTokenUsagePolicy
   });
 }
 
-export function createPassthroughStreamWithLogger(provider = null, reqLogger = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null, policyModel = null, earlyStreamCutoff = false, onEarlyTerminal = null) {
+export function createPassthroughStreamWithLogger(provider = null, reqLogger = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null, policyModel = null, earlyStreamCutoff = false, onEarlyTerminal = null, clientTokenUsagePolicy = null) {
   return createSSEStream({
     mode: STREAM_MODE.PASSTHROUGH,
     provider,
@@ -638,6 +640,7 @@ export function createPassthroughStreamWithLogger(provider = null, reqLogger = n
     onStreamComplete,
     apiKey,
     earlyStreamCutoff,
-    onEarlyTerminal
+    onEarlyTerminal,
+    clientTokenUsagePolicy
   });
 }

@@ -223,7 +223,7 @@ export function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
  * Handle case: provider forced streaming but client wants JSON.
  * Supports both Codex/Responses API SSE and standard Chat Completions SSE.
  */
-export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, clientRequestedModel, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, customToolNames, trackDone, appendLog, reqTag, log, earlyStreamCutoff = false }) {
+export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, clientRequestedModel, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, customToolNames, trackDone, appendLog, reqTag, log, earlyStreamCutoff = false, clientTokenUsagePolicy = null }) {
   const contentType = providerResponse.headers.get("content-type") || "";
   // A number of OpenAI-compatible gateways (including Foza) stream NDJSON/SSE
   // while incorrectly declaring application/json. This feature forces the
@@ -286,7 +286,7 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
         if (jsonResponse && typeof jsonResponse === "object") {
           jsonResponse.model = publicModelName(clientRequestedModel || body?.model || jsonResponse.model || model);
         }
-        applyClientTokenUsagePolicy(jsonResponse, createClientTokenUsagePolicy(body));
+        applyClientTokenUsagePolicy(jsonResponse, clientTokenUsagePolicy || createClientTokenUsagePolicy(body));
         return { success: true, response: new Response(JSON.stringify(jsonResponse), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }) };
       }
 
@@ -356,7 +356,7 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
         };
       }
 
-      applyClientTokenUsagePolicy(finalResp, createClientTokenUsagePolicy(body));
+      applyClientTokenUsagePolicy(finalResp, clientTokenUsagePolicy || createClientTokenUsagePolicy(body));
       return { success: true, response: new Response(JSON.stringify(finalResp), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }) };
     } catch (err) {
       console.error("[ChatCore] Responses API SSE→JSON failed:", err);
@@ -433,7 +433,7 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
       ? chatCompletionToResponses(parsed, customToolNames)
       : parsed;
 
-    applyClientTokenUsagePolicy(finalBody, createClientTokenUsagePolicy(body));
+    applyClientTokenUsagePolicy(finalBody, clientTokenUsagePolicy || createClientTokenUsagePolicy(body));
 
     return { success: true, response: new Response(JSON.stringify(finalBody), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }) };
   } catch (err) {
