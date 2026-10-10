@@ -300,7 +300,6 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       // Retain the non-enumerable combo marker across this internal copy. It is
       // consumed only by response usage policy and never reaches the provider.
       body: preserveComboModelMarker(body, { ...body, model: body.model || `${provider}/${model}` }),
-      clientTokenUsagePolicy,
       modelInfo: { provider, model },
       credentials: refreshedCredentials,
       log,
