@@ -498,6 +498,17 @@ export default function RequestDetailsTab() {
               )}
               
               <CollapsibleSection title="4. Client Response (Final)" defaultOpen={true} icon="output">
+                {selectedDetail.status === "error" && selectedDetail.response?.error && (
+                  <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-700 dark:text-red-300">
+                    <div className="font-semibold">
+                      Request failed{selectedDetail.response.status ? ` (${selectedDetail.response.status})` : ""}
+                      {selectedDetail.response.code ? ` · ${selectedDetail.response.code}` : ""}
+                    </div>
+                    <pre className="mt-1 whitespace-pre-wrap break-words font-mono text-xs">
+                      {selectedDetail.response.error}
+                    </pre>
+                  </div>
+                )}
                 {selectedDetail.response?.thinking && (
                   <div className="mb-4">
                     <h4 className="font-semibold text-text-main mb-2 flex items-center gap-2 text-xs uppercase tracking-wide opacity-70">
