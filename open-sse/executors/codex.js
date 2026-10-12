@@ -1,5 +1,5 @@
 import { BaseExecutor } from "./base.js";
-import { CODEX_DEFAULT_INSTRUCTIONS } from "../config/codexInstructions.js";
+import { CODEX_DEFAULT_INSTRUCTIONS, getCodexInstructions } from "../config/codexInstructions.js";
 import { PROVIDERS } from "../config/providers.js";
 import {
   refreshProviderCredentials,
@@ -443,9 +443,15 @@ export class CodexExecutor extends BaseExecutor {
     // Ensure streaming is enabled (Codex API requires it)
     body.stream = true;
 
-    // If no instructions provided, inject default Codex instructions
+    // Map virtual Codex review models to the upstream Codex model before suffix parsing.
+    body.model = getModelUpstreamId("cx", body.model || model);
+
+    // Emulate Codex CLI behavior: Always send official instructions matching the active model
+    const baseInstructions = getCodexInstructions(body.model || model);
     if (!body.instructions || body.instructions.trim() === "") {
-      body.instructions = CODEX_DEFAULT_INSTRUCTIONS;
+      body.instructions = baseInstructions;
+    } else if (!body.instructions.includes("You are Codex")) {
+      body.instructions = `${baseInstructions}\n\n# User Instructions\n\n${body.instructions}`;
     }
 
     // Ensure store is false (Codex requirement)
@@ -455,9 +461,6 @@ export class CodexExecutor extends BaseExecutor {
     if (!body.prompt_cache_key && this._currentSessionId) {
       body.prompt_cache_key = this._currentSessionId;
     }
-
-    // Map virtual Codex review models to the upstream Codex model before suffix parsing.
-    body.model = getModelUpstreamId("cx", body.model || model);
 
     // Extract thinking level from model name suffix
     // e.g., gpt-5.3-codex-high → high, gpt-5.3-codex → medium (default)

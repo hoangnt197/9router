@@ -5,10 +5,10 @@
  */
 
 const MEDIA_TOKEN_ESTIMATES = {
-  image: 800,
-  audio: 500,
-  video: 1000,
-  file: 1000,
+  image: 100,
+  audio: 100,
+  video: 200,
+  file: 100,
 };
 
 const MEDIA_FIELDS = new Map([
