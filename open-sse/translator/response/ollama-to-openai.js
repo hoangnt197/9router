@@ -25,7 +25,7 @@ export function ollamaToOpenAIResponse(chunk, state) {
     state.ollama = {
       id: `chatcmpl-${Date.now()}`,
       created: Math.floor(Date.now() / 1000),
-      model: chunk.model || state.model
+      model: state.model || chunk.model
     };
   }
 

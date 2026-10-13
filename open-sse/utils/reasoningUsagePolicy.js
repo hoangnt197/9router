@@ -25,8 +25,13 @@ function normalizeTokenRules(rules) {
     const rawUpTo = rule?.upTo;
     const upTo = rawUpTo === null || rawUpTo === undefined || rawUpTo === "" ? null : Math.floor(Number(rawUpTo));
     if (upTo !== null && (!Number.isFinite(upTo) || upTo < 1)) continue;
-    const chanceValue = Number(rule?.chance);
-    const normalized = { upTo, multiplierMin: min, multiplierMax: max, chance: Number.isFinite(chanceValue) ? Math.max(0, Math.min(100, chanceValue)) : 100 };
+    const powerValue = Number(rule?.power);
+    const normalized = {
+      upTo,
+      multiplierMin: min,
+      multiplierMax: max,
+      power: Number.isFinite(powerValue) && powerValue > 0 ? powerValue : 1,
+    };
     if (upTo === null) unlimited ||= normalized;
     else finite.push(normalized);
   }
@@ -53,13 +58,14 @@ function reportComboName(value) {
 }
 
 export function markComboModelRequest(body, modelItem = null, comboName = null) {
-  Object.defineProperty(body, COMBO_MODEL_MARKER, { value: true, enumerable: false });
-  const originalComboName = reportComboName(comboName || body?.model);
+  Object.defineProperty(body, COMBO_MODEL_MARKER, { value: true, enumerable: false, configurable: true, writable: true });
+  const existingComboName = body?.[COMBO_ORIGINAL_NAME];
+  const originalComboName = existingComboName || reportComboName(comboName || body?.model);
   if (originalComboName) {
-    Object.defineProperty(body, COMBO_ORIGINAL_NAME, { value: originalComboName, enumerable: false });
+    Object.defineProperty(body, COMBO_ORIGINAL_NAME, { value: originalComboName, enumerable: false, configurable: true, writable: true });
   }
   if (modelItem && typeof modelItem === "object") {
-    Object.defineProperty(body, COMBO_MODEL_TOKEN_RULES, { value: modelItem, enumerable: false });
+    Object.defineProperty(body, COMBO_MODEL_TOKEN_RULES, { value: modelItem, enumerable: false, configurable: true, writable: true });
   }
   return body;
 }
@@ -130,8 +136,9 @@ export function createReasoningUsagePolicy(body, effectiveModel) {
   const effective = isInternalComboModel ? effortFromInternalModel(effectiveModel) : null;
   const gap = requested && effective ? EFFORT_LEVELS[requested] - EFFORT_LEVELS[effective] : 0;
   const hasComparableComboEffort = isInternalComboModel && Boolean(requested) && Boolean(effective);
+  const targetModel = getComboName(body) || body?.model;
   return {
-    publicModel: publicModelName(body?.model),
+    publicModel: publicModelName(targetModel),
     multiplier: gap > 0 ? gap : 1,
     // Only a lower internal effort justifies changing a provider-reported value.
     adjustUsage: hasComparableComboEffort && gap > 0,
@@ -151,43 +158,16 @@ export function createClientTokenUsagePolicy(body) {
   return policy?.input?.length || policy?.output?.length ? policy : null;
 }
 
-function appliedTokenMultiplier(value, rules, random) {
-  if (!Number.isFinite(value) || value <= 0) return 1;
+function appliedTokenValue(value, rules, random) {
+  if (!Number.isFinite(value) || value <= 0) return value;
   const rule = rules?.find((candidate) => candidate.upTo === null || value <= candidate.upTo);
-  if (!rule || rule.chance <= 0 || random() * 100 >= rule.chance) return 1;
-  const max = rule.multiplierMax ?? rule.multiplierMin;
-  const multiplier = max === rule.multiplierMin
-    ? rule.multiplierMin
-    : rule.multiplierMin + random() * (max - rule.multiplierMin);
-  return multiplier > 1 ? multiplier : 1;
-}
-
-function inputCacheTokens(usage) {
-  const cached = usage.input_tokens_details?.cached_tokens
-    ?? usage.prompt_tokens_details?.cached_tokens
-    ?? usage.cached_tokens
-    ?? usage.cache_read_input_tokens
-    ?? usage.cachedContentTokenCount
-    ?? 0;
-  const cacheWrite = usage.input_tokens_details?.cache_creation_tokens
-    ?? usage.prompt_tokens_details?.cache_creation_tokens
-    ?? usage.cache_creation_input_tokens
-    ?? 0;
-  return Math.max(0, Number(cached) || 0) + Math.max(0, Number(cacheWrite) || 0);
-}
-
-function scaledInputValue(usage, inputKey, input, multiplier) {
-  if (!Number.isFinite(input)) return input;
-  // Tier multipliers apply to the full upstream input total, including cache.
-  // Cache counters themselves stay unchanged. Claude reports those counters
-  // separately, so subtract them back out of input_tokens after scaling total.
-  const cacheIsSeparate = inputKey === "input_tokens"
-    && usage.input_tokens_details === undefined
-    && (usage.cache_read_input_tokens !== undefined || usage.cache_creation_input_tokens !== undefined);
-  const scaledTotal = Math.round(inputMultiplierBasis(usage, inputKey, input) * multiplier);
-  return cacheIsSeparate
-    ? Math.max(0, scaledTotal - inputCacheTokens(usage))
-    : scaledTotal;
+  if (!rule) return value;
+  const lower = Math.ceil(value * rule.multiplierMin);
+  const upper = Math.floor(value * (rule.multiplierMax ?? rule.multiplierMin));
+  const biased = Math.pow(random(), rule.power ?? 1);
+  return lower <= upper
+    ? Math.min(upper, lower + Math.floor((upper - lower + 1) * biased))
+    : lower;
 }
 
 function inputMultiplierBasis(usage, inputKey, input) {
@@ -220,10 +200,13 @@ function applyUsageMultiplier(usage, inputKey, outputKey, totalKey, policy, rand
   Object.defineProperty(usage, CLIENT_USAGE_APPLIED, { value: true, enumerable: false });
   const input = Number(usage[inputKey]);
   const output = Number(usage[outputKey]);
-  const inputMultiplier = appliedTokenMultiplier(inputMultiplierBasis(usage, inputKey, input), policy?.input, random);
-  const outputMultiplier = appliedTokenMultiplier(output, policy?.output, random);
-  const nextInput = scaledInputValue(usage, inputKey, input, inputMultiplier);
-  const nextOutput = Number.isFinite(output) ? Math.round(output * outputMultiplier) : output;
+  const inputBasis = inputMultiplierBasis(usage, inputKey, input);
+  const nextInputTotal = appliedTokenValue(inputBasis, policy?.input, random);
+  const cacheAdjustment = inputKey === "input_tokens" ? inputBasis - input : 0;
+  const nextInput = Number.isFinite(input)
+    ? Math.max(0, nextInputTotal - cacheAdjustment)
+    : input;
+  const nextOutput = appliedTokenValue(output, policy?.output, random);
   if (Number.isFinite(nextInput)) usage[inputKey] = nextInput;
   if (Number.isFinite(nextOutput)) usage[outputKey] = nextOutput;
   if (options.recalculateTotal && Number.isFinite(nextInput) && Number.isFinite(nextOutput)) {

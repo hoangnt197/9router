@@ -1,5 +1,5 @@
 import { BaseExecutor } from "./base.js";
-import { CODEX_DEFAULT_INSTRUCTIONS, getCodexInstructions } from "../config/codexInstructions.js";
+import { getCodexInstructions } from "../config/codexInstructions.js";
 import { PROVIDERS } from "../config/providers.js";
 import {
   refreshProviderCredentials,
@@ -446,12 +446,12 @@ export class CodexExecutor extends BaseExecutor {
     // Map virtual Codex review models to the upstream Codex model before suffix parsing.
     body.model = getModelUpstreamId("cx", body.model || model);
 
-    // Emulate Codex CLI behavior: Always send official instructions matching the active model
-    const baseInstructions = getCodexInstructions(body.model || model);
-    if (!body.instructions || body.instructions.trim() === "") {
-      body.instructions = baseInstructions;
-    } else if (!body.instructions.includes("You are Codex")) {
-      body.instructions = `${baseInstructions}\n\n# User Instructions\n\n${body.instructions}`;
+    // Only inject official instructions when client didn't provide instructions or system prompt
+    const hasClientInstructions = (typeof body.instructions === "string" && body.instructions.trim().length > 0)
+      || (Array.isArray(body.input) && body.input.some(item => item && (item.role === "developer" || item.role === "system")));
+
+    if (!hasClientInstructions) {
+      body.instructions = getCodexInstructions(body.model || model);
     }
 
     // Ensure store is false (Codex requirement)

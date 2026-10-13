@@ -12,6 +12,7 @@ import { SSE_HEADERS_CORS as SSE_HEADERS } from "../../utils/sseConstants.js";
 import { upstreamResponseHeaders } from "../../utils/upstreamHeaders.js";
 
 import { stripThinkingSuffix } from "../../translator/concerns/thinkingUnified.js";
+import { getComboName, publicModelName } from "../../utils/reasoningUsagePolicy.js";
 
 // Codex returns Responses API SSE → which client format to translate INTO, by request sourceFormat.
 // Gemini-family all map to ANTIGRAVITY decoder; unknown sources fall back to OPENAI.
@@ -38,7 +39,7 @@ export function buildTransformStream({ provider, sourceFormat, targetFormat, use
     && targetFormat === FORMATS.OPENAI_RESPONSES
     && sourceFormat === FORMATS.OPENAI_RESPONSES;
   const needsCodexTranslation = isResponsesProvider && targetFormat === FORMATS.OPENAI_RESPONSES && !isDroidCLI && !isNativeResponsesStream;
-  const clientModel = clientRequestedModel || body?.model || stripThinkingSuffix(model);
+  const clientModel = publicModelName(clientRequestedModel || getComboName(body) || body?.model || model);
 
   if (isNativeResponsesStream) {
     return createSSETransformStreamWithLogger(

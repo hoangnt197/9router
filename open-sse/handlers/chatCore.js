@@ -30,7 +30,7 @@ import { stripUnsupportedModalities } from "../translator/concerns/modality.js";
 import { prefetchRemoteImages } from "../translator/concerns/prefetch.js";
 import { defaultClaudeToolType } from "../translator/concerns/toolCall.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
-import { getComboHeadroomMinInputTokens, isComboModelRequest, preserveComboModelMarker } from "../utils/reasoningUsagePolicy.js";
+import { getComboHeadroomMinInputTokens, getComboName, isComboModelRequest, preserveComboModelMarker, publicModelName } from "../utils/reasoningUsagePolicy.js";
 import { estimateInputTokens } from "../utils/inputTokenEstimator.js";
 
 /**
@@ -516,7 +516,8 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
     return createErrorResult(statusCode, errMsg, resetsAtMs);
   }
 
-  const clientRequestedModel = body?.model ? stripThinkingSuffix(body.model) : stripThinkingSuffix(model);
+  const targetModel = getComboName(body) || body?.model || model;
+  const clientRequestedModel = publicModelName(targetModel);
   const sharedCtx = { provider, model, clientRequestedModel, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, pxpipe: pxpipeSummary, reqTag, log, clientTokenUsagePolicy };
   const appendLog = (extra) => appendRequestLog({ model, provider, connectionId, ...extra }).catch(() => { });
   const trackDone = () => trackPendingRequest(model, provider, connectionId, false);

@@ -23,16 +23,16 @@ import KeyAccessControls from "./components/KeyAccessControls";
 function KeyTokenRuleEditor({ label, rules = [], onChange }) {
   const update = (index, patch) => onChange(rules.map((rule, i) => i === index ? { ...rule, ...patch } : rule));
   return <div className="space-y-1.5 rounded border border-black/5 p-2 dark:border-white/5">
-    <div className="flex items-center justify-between"><span className="text-xs font-medium">{label}</span><button type="button" onClick={() => onChange([...rules, { upTo: null, multiplierMin: 1, multiplierMax: "", chance: 100 }])} className="text-[10px] text-primary hover:underline">+ Add tier</button></div>
+    <div className="flex items-center justify-between"><span className="text-xs font-medium">{label}</span><button type="button" onClick={() => onChange([...rules, { upTo: null, multiplierMin: 1, multiplierMax: "", power: 1 }])} className="text-[10px] text-primary hover:underline">+ Add tier</button></div>
     {rules.length === 0 && <p className="text-[10px] text-text-muted">No tiers configured.</p>}
     {rules.map((rule, index) => <div key={index} className="grid grid-cols-[1.1fr_1fr_1fr_0.9fr_auto] gap-1">
       <input type="number" min="1" step="1" placeholder="Unlimited" value={rule.upTo ?? ""} onChange={(e) => update(index, { upTo: e.target.value })} title="Blank means unlimited" className="min-w-0 rounded border border-black/10 bg-white px-1.5 py-1 font-mono text-[10px] outline-none dark:border-white/10 dark:bg-black/20" />
       <input type="number" min="1" step="0.01" placeholder="Min ×" value={rule.multiplierMin ?? ""} onChange={(e) => update(index, { multiplierMin: e.target.value })} className="min-w-0 rounded border border-black/10 bg-white px-1.5 py-1 font-mono text-[10px] outline-none dark:border-white/10 dark:bg-black/20" />
       <input type="number" min="1" step="0.01" placeholder="Max ×" value={rule.multiplierMax ?? ""} onChange={(e) => update(index, { multiplierMax: e.target.value })} className="min-w-0 rounded border border-black/10 bg-white px-1.5 py-1 font-mono text-[10px] outline-none dark:border-white/10 dark:bg-black/20" />
-      <input type="number" min="0" max="100" step="1" placeholder="100%" value={rule.chance ?? 100} onChange={(e) => update(index, { chance: e.target.value })} className="min-w-0 rounded border border-black/10 bg-white px-1.5 py-1 font-mono text-[10px] outline-none dark:border-white/10 dark:bg-black/20" />
+      <input type="number" min="0.01" step="0.01" placeholder="Power" value={rule.power ?? 1} onChange={(e) => update(index, { power: e.target.value })} className="min-w-0 rounded border border-black/10 bg-white px-1.5 py-1 font-mono text-[10px] outline-none dark:border-white/10 dark:bg-black/20" />
       <button type="button" onClick={() => onChange(rules.filter((_, i) => i !== index))} className="text-text-muted hover:text-red-500" title="Remove tier">×</button>
     </div>)}
-    {rules.length > 0 && <div className="grid grid-cols-[1.1fr_1fr_1fr_0.9fr_auto] gap-1 text-[9px] text-text-muted"><span>Up to tokens</span><span>Min ×</span><span>Max ×</span><span>Chance</span></div>}
+    {rules.length > 0 && <div className="grid grid-cols-[1.1fr_1fr_1fr_0.9fr_auto] gap-1 text-[9px] text-text-muted"><span>Up to tokens</span><span>Min ×</span><span>Max ×</span><span>Power</span></div>}
   </div>;
 }
 

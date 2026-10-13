@@ -8,7 +8,7 @@ import { dbg, isDebugEnabled } from "./debugLog.js";
 
 import { stripThinkingSuffix } from "../translator/concerns/thinkingUnified.js";
 import { SSE_DONE, SSE_HEADERS, SSE_HEADERS_NO_BUFFER } from "./sseConstants.js";
-import { applyClientTokenUsagePolicy, applyResponsePolicy, createClientTokenUsagePolicy, createReasoningUsagePolicy } from "./reasoningUsagePolicy.js";
+import { applyClientTokenUsagePolicy, applyResponsePolicy, createClientTokenUsagePolicy, createReasoningUsagePolicy, getComboName, publicModelName } from "./reasoningUsagePolicy.js";
 
 export { COLORS, formatSSE };
 export { SSE_DONE, SSE_HEADERS, SSE_HEADERS_NO_BUFFER };
@@ -65,7 +65,7 @@ export function createSSEStream(options = {}) {
   // Per-stream decoder with stream:true to correctly handle multi-byte chars split across chunks
   const decoder = new TextDecoder("utf-8", { fatal: false });
 
-  const effectiveModel = body?.model || stripThinkingSuffix(model);
+  const effectiveModel = publicModelName(getComboName(body) || body?.model || model);
   const state = mode === STREAM_MODE.TRANSLATE
     ? { ...initState(sourceFormat), provider, toolNameMap, customToolNames: new Set(customToolNames || []), model: effectiveModel, sessionId: credentials?._clientSessionId || null }
     : null;
@@ -165,18 +165,28 @@ export function createSSEStream(options = {}) {
               // terminal frame.
               if (earlyStreamCutoff) delete parsed.usage;
 
+              let fieldsInjected = false;
+
               // The selected combo member can carry an internal provider prefix
               // and effort suffix. Never expose that routing implementation
               // detail in an SSE chunk (the final usage policy below handles
               // response-shaped payloads and usage accounting separately).
               if (responsePolicy.publicModel && typeof parsed.model === "string") {
-                parsed.model = responsePolicy.publicModel;
+                if (parsed.model !== responsePolicy.publicModel) {
+                  parsed.model = responsePolicy.publicModel;
+                  fieldsInjected = true;
+                }
+              }
+              if (responsePolicy.publicModel && parsed.response && typeof parsed.response.model === "string") {
+                if (parsed.response.model !== responsePolicy.publicModel) {
+                  parsed.response.model = responsePolicy.publicModel;
+                  fieldsInjected = true;
+                }
               }
 
               const idFixed = fixInvalidId(parsed);
 
               // Ensure OpenAI-required fields are present on streaming chunks (Letta compat)
-              let fieldsInjected = false;
               if (parsed.choices !== undefined) {
                 if (!parsed.object) { parsed.object = "chat.completion.chunk"; fieldsInjected = true; }
                 if (!parsed.created) { parsed.created = Math.floor(Date.now() / 1000); fieldsInjected = true; }

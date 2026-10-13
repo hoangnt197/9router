@@ -13,7 +13,7 @@ import { appendRequestLog, saveRequestDetail } from "@/lib/usageDb.js";
 import { decloakToolNames } from "../../utils/claudeCloaking.js";
 import { restoreToolNames } from "../../utils/opencodeFingerprint.js";
 import { ROLE, RESPONSES_ITEM } from "../../translator/schema/index.js";
-import { applyClientTokenUsagePolicy, applyResponsePolicy, createClientTokenUsagePolicy, createReasoningUsagePolicy, publicModelName } from "../../utils/reasoningUsagePolicy.js";
+import { applyClientTokenUsagePolicy, applyResponsePolicy, createClientTokenUsagePolicy, createReasoningUsagePolicy, getComboName, publicModelName } from "../../utils/reasoningUsagePolicy.js";
 
 function parseToolArguments(value) {
   if (!value) return {};
@@ -361,7 +361,7 @@ export async function handleNonStreamingResponse({ providerResponse, provider, m
   }
 
   if (translatedResponse && typeof translatedResponse === "object") {
-    const cleanModel = publicModelName(clientRequestedModel || body?.model || translatedResponse.model || model);
+    const cleanModel = publicModelName(clientRequestedModel || getComboName(body) || body?.model || translatedResponse.model || model);
     translatedResponse.model = cleanModel;
   }
 

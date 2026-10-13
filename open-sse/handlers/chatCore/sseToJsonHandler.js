@@ -6,7 +6,7 @@ import { PROVIDERS } from "../../config/providers.js";
 import { buildRequestDetail, extractRequestConfig, saveUsageStats, formatDoneLine } from "./requestDetail.js";
 import { ROLE, RESPONSES_ITEM } from "../../translator/schema/index.js";
 import { stripThinkingSuffix } from "../../translator/concerns/thinkingUnified.js";
-import { applyClientTokenUsagePolicy, applyResponsePolicy, createClientTokenUsagePolicy, createReasoningUsagePolicy, publicModelName } from "../../utils/reasoningUsagePolicy.js";
+import { applyClientTokenUsagePolicy, applyResponsePolicy, createClientTokenUsagePolicy, createReasoningUsagePolicy, getComboName, publicModelName } from "../../utils/reasoningUsagePolicy.js";
 import { estimateUsageWithoutBuffer } from "../../utils/usageTracking.js";
 
 // Responses-API providers (e.g. codex) may emit SSE without content-type + use Responses output shape
@@ -284,7 +284,7 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
       // Client is Responses API → return as-is
       if (sourceFormat === FORMATS.OPENAI_RESPONSES) {
         if (jsonResponse && typeof jsonResponse === "object") {
-          jsonResponse.model = publicModelName(clientRequestedModel || body?.model || jsonResponse.model || model);
+          jsonResponse.model = publicModelName(clientRequestedModel || getComboName(body) || body?.model || jsonResponse.model || model);
         }
         applyClientTokenUsagePolicy(jsonResponse, clientTokenUsagePolicy || createClientTokenUsagePolicy(body));
         return { success: true, response: new Response(JSON.stringify(jsonResponse), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }) };
@@ -331,7 +331,7 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
               totalTokenCount: inTokens + outTokens,
               ...(Number.isFinite(reasoningTokens) ? { thoughtsTokenCount: reasoningTokens } : {}),
             },
-            modelVersion: publicModelName(clientRequestedModel || body?.model || model),
+            modelVersion: publicModelName(clientRequestedModel || getComboName(body) || body?.model || model),
             responseId: jsonResponse.id || `resp_${Date.now()}`
           }
         };
@@ -344,7 +344,7 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
           id: jsonResponse.id || `chatcmpl-${Date.now()}`,
           object: "chat.completion",
           created: jsonResponse.created_at || Math.floor(Date.now() / 1000),
-          model: publicModelName(clientRequestedModel || body?.model || jsonResponse.model || model),
+          model: publicModelName(clientRequestedModel || getComboName(body) || body?.model || jsonResponse.model || model),
           choices: [{ index: 0, message, finish_reason: finishReason }],
           usage: {
             prompt_tokens: inTokens,

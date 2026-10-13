@@ -19,12 +19,12 @@ export function normalizeTokenRules(rules) {
       ? null
       : Math.floor(Number(rawUpTo));
     if (upTo !== null && (!Number.isFinite(upTo) || upTo < 1)) return null;
-    const chance = Number(rule.chance);
+    const powerValue = Number(rule.power);
     return {
       upTo,
       multiplierMin: min,
       multiplierMax: max,
-      chance: Number.isFinite(chance) ? Math.max(0, Math.min(100, chance)) : 100,
+      power: Number.isFinite(powerValue) && powerValue > 0 ? powerValue : 1,
     };
   }).filter(Boolean);
 
