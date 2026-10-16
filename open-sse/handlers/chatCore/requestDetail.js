@@ -31,10 +31,17 @@ export function extractUsageFromResponse(responseBody) {
     || responseBody.usage?.input_tokens_details !== undefined
     || responseBody.usage?.output_tokens_details !== undefined;
   if (isResponsesApi && responseBody.usage) {
+    const cacheCreation = responseBody.usage.input_tokens_details?.cache_creation_tokens
+      ?? responseBody.usage.input_tokens_details?.cache_creation_input_tokens
+      ?? responseBody.usage.cache_creation_input_tokens;
+    const cachedTokens = responseBody.usage.input_tokens_details?.cached_tokens
+      ?? responseBody.usage.cached_tokens
+      ?? (cacheCreation !== undefined ? 0 : undefined);
     return {
       prompt_tokens: responseBody.usage.input_tokens || responseBody.usage.prompt_tokens || 0,
       completion_tokens: responseBody.usage.output_tokens || responseBody.usage.completion_tokens || 0,
-      cached_tokens: responseBody.usage.input_tokens_details?.cached_tokens,
+      cached_tokens: cachedTokens,
+      ...(cacheCreation !== undefined ? { cache_creation_input_tokens: cacheCreation } : {}),
       reasoning_tokens: responseBody.usage.output_tokens_details?.reasoning_tokens
         ?? responseBody.usage.completion_tokens_details?.reasoning_tokens
     };
@@ -58,10 +65,14 @@ export function extractUsageFromResponse(responseBody) {
 
   // OpenAI format
   if (responseBody.usage?.prompt_tokens !== undefined) {
+    const cacheCreation = responseBody.usage.prompt_tokens_details?.cache_creation_tokens
+      ?? responseBody.usage.prompt_tokens_details?.cache_creation_input_tokens
+      ?? responseBody.usage.cache_creation_input_tokens;
     return {
       prompt_tokens: responseBody.usage.prompt_tokens || 0,
       completion_tokens: responseBody.usage.completion_tokens || 0,
       cached_tokens: responseBody.usage.cached_tokens ?? responseBody.usage.prompt_tokens_details?.cached_tokens,
+      ...(cacheCreation !== undefined ? { cache_creation_input_tokens: cacheCreation } : {}),
       reasoning_tokens: responseBody.usage.completion_tokens_details?.reasoning_tokens
     };
   }
@@ -119,8 +130,16 @@ export function formatDoneLine({ usage, latency }) {
   const u = usage || {};
   const inTok = u.prompt_tokens ?? u.input_tokens ?? 0;
   const outTok = u.completion_tokens ?? u.output_tokens ?? 0;
-  const cacheRead = u.cache_read_input_tokens ?? u.cached_tokens ?? u.prompt_tokens_details?.cached_tokens ?? 0;
-  const cacheCreate = u.cache_creation_input_tokens ?? 0;
+  const cacheRead = u.cache_read_input_tokens
+    ?? u.cached_tokens
+    ?? u.prompt_tokens_details?.cached_tokens
+    ?? u.input_tokens_details?.cached_tokens
+    ?? 0;
+  const cacheCreate = u.cache_creation_input_tokens
+    ?? u.prompt_tokens_details?.cache_creation_tokens
+    ?? u.input_tokens_details?.cache_creation_tokens
+    ?? u.input_tokens_details?.cache_creation_input_tokens
+    ?? 0;
   let inStr = `IN ${inTok}`;
   if (cacheRead || cacheCreate) {
     const parts = [];

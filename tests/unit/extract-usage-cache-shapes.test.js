@@ -12,7 +12,7 @@ vi.mock("../../open-sse/utils/stream.js", () => ({
   formatSSE: vi.fn(),
 }));
 
-import { extractUsageFromResponse } from "../../open-sse/handlers/chatCore/requestDetail.js";
+import { extractUsageFromResponse, formatDoneLine } from "../../open-sse/handlers/chatCore/requestDetail.js";
 import { canonicalizeUsage } from "../../open-sse/utils/usageTracking.js";
 
 // The three real-world usage shapes and how extractUsageFromResponse() must
@@ -110,5 +110,50 @@ describe("extractUsageFromResponse cache surfaces", () => {
     // Non-final Ollama chunk (done:false) carries no usage — must not match.
     expect(extractUsageFromResponse({ model: "x", done: false, prompt_eval_count: 5 }))
       .toBeNull();
+  });
+
+  it("surfaces OpenAI Responses input_tokens_details.cache_creation_tokens as cache_creation_input_tokens", () => {
+    const out = extractUsageFromResponse({
+      usage: {
+        input_tokens: 25421,
+        output_tokens: 5,
+        total_tokens: 25426,
+        input_tokens_details: { cached_tokens: 24000, cache_creation_tokens: 500 },
+      },
+    });
+    expect(out.cached_tokens).toBe(24000);
+    expect(out.cache_creation_input_tokens).toBe(500);
+    expect(out.prompt_tokens).toBe(25421);
+
+    const canon = canonicalizeUsage(out);
+    expect(canon.prompt_tokens).toBe(25421);
+    expect(canon.cached_tokens).toBe(24000);
+    expect(canon.cache_creation_input_tokens).toBe(500);
+    expect(canon.total_tokens).toBe(25426);
+  });
+
+  it("canonicalizeUsage directly parses raw Responses input_tokens_details with cache creation", () => {
+    const rawResponsesUsage = {
+      input_tokens: 10000,
+      output_tokens: 200,
+      total_tokens: 10200,
+      input_tokens_details: { cached_tokens: 8000, cache_creation_tokens: 1500 }
+    };
+    const canon = canonicalizeUsage(rawResponsesUsage);
+    expect(canon.prompt_tokens).toBe(10000);
+    expect(canon.cached_tokens).toBe(8000);
+    expect(canon.cache_creation_input_tokens).toBe(1500);
+    expect(canon.completion_tokens).toBe(200);
+    expect(canon.total_tokens).toBe(10200);
+  });
+
+  it("formatDoneLine prints cache breakdown for input_tokens_details", () => {
+    const usage = {
+      input_tokens: 10000,
+      output_tokens: 200,
+      input_tokens_details: { cached_tokens: 8000, cache_creation_tokens: 1500 }
+    };
+    const line = formatDoneLine({ usage, latency: { total: 120, ttft: 45 } });
+    expect(line).toBe("DONE 120ms · TTFT 45ms · IN 10000 (CACHE ↻8000 +1500) · OUT 200");
   });
 });

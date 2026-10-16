@@ -74,7 +74,7 @@ export async function handleEmbeddingsCore({
     log?.debug?.("EMBEDDINGS", `Fetch error: ${errMsg}`);
     return createErrorResult(HTTP_STATUS.BAD_GATEWAY, errMsg);
   }
-
+  
   // Handle 401/403 — try token refresh (skip for noAuth providers)
   const executor = getExecutor(provider);
   if (

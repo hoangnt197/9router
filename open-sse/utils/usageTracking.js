@@ -180,11 +180,15 @@ export function canonicalizeUsage(usage) {
   const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
   const completion = num(usage.completion_tokens ?? usage.output_tokens);
   const reasoning = num(usage.reasoning_tokens);
-  // Fall back to the nested prompt_tokens_details.cache_creation_tokens shape
-  // (buildUsage()'s OpenAI-forwarding format) when the top-level field is
-  // absent, so callers that pass a buildUsage() object through don't silently
-  // drop cache_creation.
-  const cacheCreation = num(usage.cache_creation_input_tokens ?? usage.prompt_tokens_details?.cache_creation_tokens);
+  // Fall back to the nested prompt_tokens_details or input_tokens_details cache_creation shapes
+  // when the top-level field is absent, so callers that pass raw usage objects through
+  // don't silently drop cache_creation.
+  const cacheCreation = num(
+    usage.cache_creation_input_tokens
+      ?? usage.prompt_tokens_details?.cache_creation_tokens
+      ?? usage.input_tokens_details?.cache_creation_tokens
+      ?? usage.input_tokens_details?.cache_creation_input_tokens
+  );
 
   let prompt = num(usage.prompt_tokens ?? usage.input_tokens);
   let cached;
@@ -202,11 +206,14 @@ export function canonicalizeUsage(usage) {
     cached = num(usage.cache_read_input_tokens);
     prompt = prompt + cached + cacheCreation;
   } else {
-    // OpenAI/Gemini path (or already-canonical input): prompt already includes cached_tokens.
+    // OpenAI/Gemini/Responses path (or already-canonical input): prompt already includes cached_tokens.
     // Mirror the cacheCreation fallback above: buildUsage() only ever emits the
-    // nested prompt_tokens_details.cached_tokens shape, so without this the
-    // cache-read count is silently dropped on every buildUsage()-derived usage.
-    cached = num(usage.cached_tokens ?? usage.prompt_tokens_details?.cached_tokens);
+    // nested prompt_tokens_details.cached_tokens shape, and Responses API uses input_tokens_details.
+    cached = num(
+      usage.cached_tokens
+        ?? usage.prompt_tokens_details?.cached_tokens
+        ?? usage.input_tokens_details?.cached_tokens
+    );
   }
 
   const result = {
@@ -279,13 +286,22 @@ export function extractUsage(chunk) {
   if ((chunk.type === "response.completed" || chunk.type === "response.done") && chunk.response?.usage && typeof chunk.response.usage === "object") {
     const usage = chunk.response.usage;
     const cachedTokens = usage.input_tokens_details?.cached_tokens;
+    const cacheCreationTokens = usage.input_tokens_details?.cache_creation_tokens
+      ?? usage.input_tokens_details?.cache_creation_input_tokens
+      ?? usage.cache_creation_input_tokens;
     return normalizeUsage({
       prompt_tokens: usage.input_tokens || usage.prompt_tokens || 0,
       completion_tokens: usage.output_tokens || usage.completion_tokens || 0,
       cached_tokens: cachedTokens,
+      cache_creation_input_tokens: cacheCreationTokens,
       reasoning_tokens: usage.output_tokens_details?.reasoning_tokens
         ?? usage.completion_tokens_details?.reasoning_tokens,
-      prompt_tokens_details: cachedTokens ? { cached_tokens: cachedTokens } : undefined
+      prompt_tokens_details: (cachedTokens !== undefined || cacheCreationTokens !== undefined)
+        ? {
+            ...(cachedTokens !== undefined ? { cached_tokens: cachedTokens } : {}),
+            ...(cacheCreationTokens !== undefined ? { cache_creation_tokens: cacheCreationTokens } : {})
+          }
+        : undefined
     });
   }
 
@@ -295,6 +311,7 @@ export function extractUsage(chunk) {
       prompt_tokens: chunk.usage.prompt_tokens,
       completion_tokens: chunk.usage.completion_tokens || 0,
       cached_tokens: chunk.usage.prompt_tokens_details?.cached_tokens || chunk.usage.prompt_cache_hit_tokens,
+      cache_creation_input_tokens: chunk.usage.prompt_tokens_details?.cache_creation_tokens || chunk.usage.cache_creation_input_tokens,
       reasoning_tokens: chunk.usage.completion_tokens_details?.reasoning_tokens
         ?? chunk.usage.output_tokens_details?.reasoning_tokens,
       prompt_tokens_details: chunk.usage.prompt_tokens_details,

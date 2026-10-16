@@ -26,11 +26,21 @@ function normalizeTokenRules(rules) {
     const upTo = rawUpTo === null || rawUpTo === undefined || rawUpTo === "" ? null : Math.floor(Number(rawUpTo));
     if (upTo !== null && (!Number.isFinite(upTo) || upTo < 1)) continue;
     const powerValue = Number(rule?.power);
+    const rawRatio = rule?.cacheCreationRatio ?? rule?.cacheWriteRatio;
+    let cacheCreationRatio = undefined;
+    if (rawRatio !== null && rawRatio !== undefined && rawRatio !== "") {
+      const r = Number(rawRatio);
+      const normalizedR = r > 1 && r <= 100 ? r / 100 : r;
+      if (Number.isFinite(normalizedR) && normalizedR >= 0 && normalizedR <= 1) {
+        cacheCreationRatio = Number(normalizedR.toFixed(4));
+      }
+    }
     const normalized = {
       upTo,
       multiplierMin: min,
       multiplierMax: max,
       power: Number.isFinite(powerValue) && powerValue > 0 ? powerValue : 1,
+      ...(cacheCreationRatio !== undefined ? { cacheCreationRatio } : {}),
     };
     if (upTo === null) unlimited ||= normalized;
     else finite.push(normalized);
@@ -70,13 +80,20 @@ export function markComboModelRequest(body, modelItem = null, comboName = null) 
   return body;
 }
 
+export const CACHE_CREATION_RATIO = 0.7;
+
 /** Attach the API-key-owned presentation policy without forwarding it upstream. */
 export function markClientTokenUsagePolicy(body, policy = null) {
   const input = normalizeTokenRules(policy?.input);
   const output = normalizeTokenRules(policy?.output);
   if (input.length || output.length) {
+    const policyObj = { input, output };
+    if (policy?.cacheCreationRatio !== undefined) {
+      const r = Number(policy.cacheCreationRatio);
+      if (Number.isFinite(r) && r >= 0 && r <= 1) policyObj.cacheCreationRatio = r;
+    }
     Object.defineProperty(body, CLIENT_TOKEN_USAGE_POLICY, {
-      value: { input, output }, enumerable: false,
+      value: policyObj, enumerable: false,
     });
   }
   return body;
@@ -158,16 +175,21 @@ export function createClientTokenUsagePolicy(body) {
   return policy?.input?.length || policy?.output?.length ? policy : null;
 }
 
-function appliedTokenValue(value, rules, random) {
-  if (!Number.isFinite(value) || value <= 0) return value;
+function appliedTokenValueWithRule(value, rules, random) {
+  if (!Number.isFinite(value) || value <= 0) return { value, rule: null };
   const rule = rules?.find((candidate) => candidate.upTo === null || value <= candidate.upTo);
-  if (!rule) return value;
+  if (!rule) return { value, rule: null };
   const lower = Math.ceil(value * rule.multiplierMin);
   const upper = Math.floor(value * (rule.multiplierMax ?? rule.multiplierMin));
   const biased = Math.pow(random(), rule.power ?? 1);
-  return lower <= upper
+  const calculated = lower <= upper
     ? Math.min(upper, lower + Math.floor((upper - lower + 1) * biased))
     : lower;
+  return { value: calculated, rule };
+}
+
+function appliedTokenValue(value, rules, random) {
+  return appliedTokenValueWithRule(value, rules, random).value;
 }
 
 function inputMultiplierBasis(usage, inputKey, input) {
@@ -201,18 +223,56 @@ function applyUsageMultiplier(usage, inputKey, outputKey, totalKey, policy, rand
   const input = Number(usage[inputKey]);
   const output = Number(usage[outputKey]);
   const inputBasis = inputMultiplierBasis(usage, inputKey, input);
-  const nextInputTotal = appliedTokenValue(inputBasis, policy?.input, random);
-  const cacheAdjustment = inputKey === "input_tokens" ? inputBasis - input : 0;
-  const nextInput = Number.isFinite(input)
-    ? Math.max(0, nextInputTotal - cacheAdjustment)
-    : input;
+  const { value: nextInputTotal, rule: matchedInputRule } = appliedTokenValueWithRule(inputBasis, policy?.input, random);
+
+  const delta = Math.max(0, nextInputTotal - inputBasis);
+  const tierRatio = matchedInputRule?.cacheCreationRatio;
+  const creationRatio = (Number.isFinite(tierRatio) && tierRatio >= 0 && tierRatio <= 1)
+    ? tierRatio
+    : (policy?.cacheCreationRatio ?? CACHE_CREATION_RATIO);
+  const extraCacheWrite = (!options.isGemini && delta > 0)
+    ? Math.floor(delta * creationRatio)
+    : 0;
+
+  const isClaude = inputKey === "input_tokens" && !options.isResponses;
+
+  if (isClaude) {
+    const cacheRead = Number(usage.cache_read_input_tokens) || 0;
+    const curCacheWrite = Number(usage.cache_creation_input_tokens) || 0;
+    const nextCacheWrite = curCacheWrite + extraCacheWrite;
+    if (nextCacheWrite > 0) {
+      usage.cache_creation_input_tokens = nextCacheWrite;
+    }
+    const nextInput = Math.max(0, nextInputTotal - cacheRead - nextCacheWrite);
+    if (Number.isFinite(nextInput)) usage[inputKey] = nextInput;
+  } else {
+    if (options.isResponses) {
+      if (extraCacheWrite > 0) {
+        usage.input_tokens_details = usage.input_tokens_details && typeof usage.input_tokens_details === "object"
+          ? usage.input_tokens_details
+          : {};
+        const curCacheWrite = Number(usage.input_tokens_details.cache_creation_tokens ?? usage.input_tokens_details.cache_creation_input_tokens) || 0;
+        usage.input_tokens_details.cache_creation_tokens = curCacheWrite + extraCacheWrite;
+      }
+    } else if (inputKey === "prompt_tokens") {
+      if (extraCacheWrite > 0) {
+        usage.prompt_tokens_details = usage.prompt_tokens_details && typeof usage.prompt_tokens_details === "object"
+          ? usage.prompt_tokens_details
+          : {};
+        const curCacheWrite = Number(usage.prompt_tokens_details.cache_creation_tokens ?? usage.prompt_tokens_details.cache_creation_input_tokens) || 0;
+        usage.prompt_tokens_details.cache_creation_tokens = curCacheWrite + extraCacheWrite;
+      }
+    }
+    if (Number.isFinite(nextInputTotal)) usage[inputKey] = nextInputTotal;
+  }
+
   const nextOutput = appliedTokenValue(output, policy?.output, random);
-  if (Number.isFinite(nextInput)) usage[inputKey] = nextInput;
   if (Number.isFinite(nextOutput)) usage[outputKey] = nextOutput;
-  if (options.recalculateTotal && Number.isFinite(nextInput) && Number.isFinite(nextOutput)) {
+
+  if (options.recalculateTotal && Number.isFinite(nextInputTotal) && Number.isFinite(nextOutput)) {
     const extraTokens = [...inputUsageExtraKeys(usage, inputKey), ...(options.totalExtraKeys || [])]
       .reduce((sum, key) => sum + (Number(usage[key]) || 0), 0);
-    usage[totalKey] = nextInput + nextOutput + extraTokens;
+    usage[totalKey] = (isClaude ? (Number(usage[inputKey]) || 0) : nextInputTotal) + nextOutput + extraTokens;
   }
 }
 
@@ -225,6 +285,7 @@ export function applyClientTokenUsagePolicy(payload, policy, random = Math.rando
     if (usage.input_tokens !== undefined || usage.output_tokens !== undefined) {
       applyUsageMultiplier(usage, "input_tokens", "output_tokens", "total_tokens", policy, random, {
         recalculateTotal: target.object === "response" || usage.total_tokens !== undefined,
+        isResponses: target.object === "response" || usage.input_tokens_details !== undefined,
       });
     } else {
       applyUsageMultiplier(usage, "prompt_tokens", "completion_tokens", "total_tokens", policy, random, {
@@ -237,6 +298,7 @@ export function applyClientTokenUsagePolicy(payload, policy, random = Math.rando
     applyUsageMultiplier(metadata, "promptTokenCount", "candidatesTokenCount", "totalTokenCount", policy, random, {
       recalculateTotal: true,
       totalExtraKeys: ["thoughtsTokenCount"],
+      isGemini: true,
     });
   }
   return payload;

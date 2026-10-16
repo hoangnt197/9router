@@ -67,7 +67,7 @@ export function createSSEStream(options = {}) {
 
   const effectiveModel = publicModelName(getComboName(body) || body?.model || model);
   const state = mode === STREAM_MODE.TRANSLATE
-    ? { ...initState(sourceFormat), provider, toolNameMap, customToolNames: new Set(customToolNames || []), model: effectiveModel, sessionId: credentials?._clientSessionId || null }
+    ? { ...initState(sourceFormat), provider, toolNameMap, customToolNames: new Set(customToolNames || []), model: effectiveModel, sessionId: credentials?._clientSessionId || null, targetFormat }
     : null;
 
   let totalContentLength = 0;
@@ -344,6 +344,22 @@ export function createSSEStream(options = {}) {
         // For Ollama: done=true is the final chunk with finish_reason/usage, must translate
         // For other formats: done=true is the [DONE] sentinel, skip
         if (parsed && parsed.done && targetFormat !== FORMATS.OLLAMA) {
+          // If response.completed was deferred waiting for a trailing usage chunk, flush it now
+          if (state?.completionPending && sourceFormat === FORMATS.OPENAI_RESPONSES) {
+            const flushed = translateResponse(targetFormat, sourceFormat, null, state);
+            if (flushed?.length > 0) {
+              for (const item of flushed) {
+                if (item === null || item === undefined) continue;
+                applyResponsePolicy(item, responsePolicy);
+                applyClientTokenUsagePolicy(item, resolvedClientTokenUsagePolicy);
+                const output = formatSSE(item, sourceFormat);
+                reqLogger?.appendConvertedChunk?.(output);
+                controller.enqueue(sharedEncoder.encode(output));
+                sseEmittedCount++;
+              }
+            }
+          }
+
           // Synthesize response.failed if the Responses stream never sent a terminal event
           if (keepsOpenAIResponsesFormat && !openAIResponsesTerminalSeen) {
             const failedOutput = formatIncompleteOpenAIResponsesStreamFailure();

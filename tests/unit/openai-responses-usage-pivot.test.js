@@ -97,7 +97,7 @@ describe("OpenAI Responses usage across the pivot", () => {
       input_tokens: 13800,
       output_tokens: 42,
       total_tokens: 13842,
-      input_tokens_details: { cached_tokens: 12000 },
+      input_tokens_details: { cached_tokens: 12000, cache_creation_tokens: 300 },
     });
   });
 

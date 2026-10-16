@@ -40,8 +40,18 @@ function toResponsesUsage(usage) {
     total_tokens: inputTokens + outputTokens
   };
   const cachedTokens = [usage.input_tokens_details?.cached_tokens, usage.prompt_tokens_details?.cached_tokens].find(Number.isInteger);
+  const cacheCreationTokens = [
+    usage.input_tokens_details?.cache_creation_tokens,
+    usage.input_tokens_details?.cache_creation_input_tokens,
+    usage.prompt_tokens_details?.cache_creation_tokens,
+    usage.cache_creation_input_tokens
+  ].find(Number.isInteger);
   const reasoningTokens = [usage.output_tokens_details?.reasoning_tokens, usage.completion_tokens_details?.reasoning_tokens].find(Number.isInteger);
-  if (Number.isInteger(cachedTokens)) responseUsage.input_tokens_details = { cached_tokens: cachedTokens };
+  if (Number.isInteger(cachedTokens) || Number.isInteger(cacheCreationTokens)) {
+    responseUsage.input_tokens_details = {};
+    if (Number.isInteger(cachedTokens)) responseUsage.input_tokens_details.cached_tokens = cachedTokens;
+    if (Number.isInteger(cacheCreationTokens)) responseUsage.input_tokens_details.cache_creation_tokens = cacheCreationTokens;
+  }
   if (Number.isInteger(reasoningTokens)) responseUsage.output_tokens_details = { reasoning_tokens: reasoningTokens };
 
   return responseUsage;
@@ -643,8 +653,12 @@ export function openaiResponsesToOpenAIResponse(chunk, state) {
       // OpenAI Responses API: input_tokens already includes cached_tokens
       // Cache info is in input_tokens_details.cached_tokens
       const cacheReadTokens = responseUsage.input_tokens_details?.cached_tokens || responseUsage.cache_read_input_tokens || 0;
+      const cacheCreationTokens = responseUsage.input_tokens_details?.cache_creation_tokens
+        || responseUsage.input_tokens_details?.cache_creation_input_tokens
+        || responseUsage.cache_creation_input_tokens
+        || 0;
       
-      state.usage = buildUsage({ promptTokens: inputTokens, completionTokens: outputTokens, totalTokens: inputTokens + outputTokens, cachedTokens: cacheReadTokens });
+      state.usage = buildUsage({ promptTokens: inputTokens, completionTokens: outputTokens, totalTokens: inputTokens + outputTokens, cachedTokens: cacheReadTokens, cacheCreationTokens });
     }
     
     if (!state.finishReasonSent) {
