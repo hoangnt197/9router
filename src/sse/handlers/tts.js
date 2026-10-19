@@ -63,6 +63,7 @@ export async function handleTts(request) {
       comboName: modelStr,
       comboStrategy,
       comboStickyLimit,
+      inputRouting: comboStrategies[modelStr]?.inputRouting,
     });
   }
 

@@ -11,7 +11,7 @@ export { getModelAliases, setModelAlias, deleteModelAlias, getCustomModels, addC
 export { getPricing, getPricingForModel, updatePricing, resetPricing, resetAllPricing } from "./repos/pricingRepo.js";
 export { getDisabledModels, getDisabledByProvider, disableModels, enableModels } from "./repos/disabledModelsRepo.js";
 export { statsEmitter, trackPendingRequest, getActiveRequests, saveRequestUsage, getUsageHistory, getUsageStats, getChartData, appendRequestLog, getRecentLogs } from "./repos/usageRepo.js";
-export { saveRequestDetail, getRequestDetails, getRequestDetailById, getDistinctProviders } from "./repos/requestDetailsRepo.js";
+export { saveRequestDetail, getRequestDetails, getRequestDetailById, clearRequestDetails, getDistinctProviders } from "./repos/requestDetailsRepo.js";
 
 export async function initDb() {
   await getAdapter();

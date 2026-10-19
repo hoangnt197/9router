@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getRequestDetails } from "@/lib/usageDb";
+import { clearRequestDetails, getRequestDetails } from "@/lib/usageDb";
 
 /**
  * GET /api/usage/request-details
@@ -74,6 +74,19 @@ export async function GET(request) {
     console.error("[API] Failed to get request details:", error);
     return NextResponse.json(
       { error: "Failed to fetch request details" },
+      { status: 500 }
+    );
+  }
+}
+
+export async function DELETE() {
+  try {
+    const deleted = await clearRequestDetails();
+    return NextResponse.json({ success: true, deleted });
+  } catch (error) {
+    console.error("[API] Failed to clear request details:", error);
+    return NextResponse.json(
+      { error: "Failed to clear request details" },
       { status: 500 }
     );
   }

@@ -22,21 +22,26 @@ const FORMAT_TO_NATIVE = {
   commandcode: "commandcode",
 };
 
-// Strip a trailing thinking suffix "model(value)" → "model" (no-op when absent).
+const HYPHEN_THINKING_SUFFIX_RE = /^(.*)-(none|off|auto|minimal|low|medium|high|xhigh|max|ultra)\s*$/i;
+
+// Strip a trailing thinking suffix "model(value)" or "model-level" → "model".
 export function stripThinkingSuffix(model) {
   if (typeof model !== "string") return model;
-  const m = model.match(/^(.*)\([^()]+\)\s*$/);
-  return m ? m[1].trim() : model;
+  const parenthesized = model.match(/^(.*)\([^()]+\)\s*$/);
+  if (parenthesized) return parenthesized[1].trim();
+  const hyphenated = model.match(HYPHEN_THINKING_SUFFIX_RE);
+  return hyphenated ? hyphenated[1].trim() : model;
 }
 
-// Parse model-name suffix "model(value)" → { cleanModel, override }.
+// Parse model-name suffix "model(value)" or "model-level" → { cleanModel, override }.
 // value: level name (high) | number (8192) | auto | none. null override when absent.
 export function parseSuffix(model) {
   if (typeof model !== "string") return { cleanModel: model, override: null };
-  const m = model.match(/^(.*)\(([^()]+)\)\s*$/);
-  if (!m) return { cleanModel: model, override: null };
-  const cleanModel = m[1].trim();
-  const raw = m[2].trim().toLowerCase();
+  const parenthesized = model.match(/^(.*)\(([^()]+)\)\s*$/);
+  const hyphenated = parenthesized ? null : model.match(HYPHEN_THINKING_SUFFIX_RE);
+  if (!parenthesized && !hyphenated) return { cleanModel: model, override: null };
+  const cleanModel = (parenthesized ? parenthesized[1] : hyphenated[1]).trim();
+  const raw = (parenthesized ? parenthesized[2] : hyphenated[2]).trim().toLowerCase();
   if (raw === "none" || raw === "off") return { cleanModel, override: { mode: "none" } };
   if (raw === "auto") return { cleanModel, override: { mode: "auto" } };
   if (raw === "ultra") return { cleanModel, override: { mode: "level", level: raw } };

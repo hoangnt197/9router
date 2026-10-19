@@ -196,6 +196,11 @@ function positiveNumber(value) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
+function declaredInputLimit(modelItem) {
+  if (!modelItem || typeof modelItem !== "object") return null;
+  return positiveNumber(modelItem.maxInputTokens ?? modelItem.maxInput ?? modelItem.maxContextTokens ?? modelItem.maxContext);
+}
+
 /** Whether a combo object item declares enough input capacity for this request. */
 export function supportsRequestedTokenLimits(modelItem, inputTokens) {
   if (!modelItem || typeof modelItem !== "object") return true;
@@ -228,6 +233,28 @@ export function deferModelsExceedingInputLimit(models, body, estimatedInputToken
     (supportsRequestedTokenLimits(model, estimatedTokens) ? compatible : undersized).push(model);
   }
   return undersized.length === 0 ? models : [...compatible, ...undersized];
+}
+
+/**
+ * Select the configured input-capacity band for a request.
+ * Finite max-input values are band ceilings; models without a ceiling form
+ * the final catch-all band. Current ordering is preserved within a band.
+ */
+export function selectModelsForInputBand(models, estimatedInputTokens) {
+  if (!Array.isArray(models) || models.length === 0) return [];
+  const estimate = Number(estimatedInputTokens);
+  if (!Number.isFinite(estimate)) return models;
+
+  const finiteLimits = [...new Set(models
+    .map(declaredInputLimit)
+    .filter((limit) => limit !== null))]
+    .sort((a, b) => a - b);
+  const selectedLimit = finiteLimits.find((limit) => estimate <= limit);
+
+  if (selectedLimit === undefined) {
+    return models.filter((model) => declaredInputLimit(model) === null);
+  }
+  return models.filter((model) => declaredInputLimit(model) === selectedLimit);
 }
 
 /**
@@ -531,6 +558,7 @@ export async function handleComboChat({
   comboName,
   comboStrategy,
   comboStickyLimit = 1,
+  inputRouting = "soft",
   autoSwitch = true,
 }) {
   // Tokenizing a large context is CPU intensive. Routing can need the same
@@ -579,10 +607,17 @@ export async function handleComboChat({
     }
   }
 
-  // Capability auto-switch above may have moved an undersized item forward.
-  // For every strategy, preserve its relative order but defer models whose
-  // declared input capacity cannot fit this request until the final fallback.
-  if (comboStrategy === "lowest-cost") {
+  const strictInputBands = inputRouting === "band-strict";
+  if (strictInputBands) {
+    const bandModels = selectModelsForInputBand(orderedModels, estimatedInputTokens);
+    const bandLimit = bandModels.length > 0 ? declaredInputLimit(bandModels[0]) : null;
+    const bandLabel = bandLimit === null ? "> max configured input" : `<= ${bandLimit}`;
+    const names = bandModels.map((model) => (typeof model === "object" && model !== null ? model.model : model)).join(" -> ");
+    log?.info?.("COMBO", `Strict input band (estimated=${estimatedInputTokens}, ${bandLabel}) [${names || "none"}]`);
+    orderedModels = bandModels;
+  } else if (comboStrategy === "lowest-cost") {
+    // Capability auto-switch above may have moved an undersized item forward.
+    // Preserve the old soft-fallback behavior for combos without strict bands.
     orderedModels = reorderByLowestCost(orderedModels, body, estimatedInputTokens);
   } else {
     orderedModels = deferModelsExceedingInputLimit(orderedModels, body, estimatedInputTokens);

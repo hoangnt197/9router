@@ -187,8 +187,30 @@ export default function RequestDetailsTab() {
     setFilters({ provider: "", startDate: "", endDate: "" });
   };
 
+  const handleClearLogs = async () => {
+    if (!window.confirm("Clear all request detail logs? This cannot be undone.")) return;
+    try {
+      const res = await fetch("/api/usage/request-details", { method: "DELETE" });
+      if (!res.ok) throw new Error("Failed to clear request details");
+      setSelectedDetail(null);
+      setIsDrawerOpen(false);
+      await fetchDetails();
+    } catch (error) {
+      console.error("Failed to clear request details:", error);
+    }
+  };
+
   return (
     <div className="flex min-w-0 flex-col gap-6">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-text-main">Request log details</h2>
+          <p className="text-xs text-text-muted">Inspect failed request payloads and provider responses.</p>
+        </div>
+        <Button variant="outline" size="sm" icon="delete" onClick={handleClearLogs}>
+          Clear logs
+        </Button>
+      </div>
       <Card padding="md">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div className="flex min-w-0 flex-col gap-2">

@@ -46,7 +46,7 @@ function KeyTokenRuleEditor({ label, rules = [], onChange }) {
           min="0"
           max="100"
           step="1"
-          placeholder="70%"
+          placeholder="0%"
           value={
             rule.cacheCreationRatio === "" || rule.cacheCreationRatio === null || rule.cacheCreationRatio === undefined
               ? ""
@@ -55,7 +55,7 @@ function KeyTokenRuleEditor({ label, rules = [], onChange }) {
                   : rule.cacheCreationRatio)
           }
           onChange={(e) => update(index, { cacheCreationRatio: e.target.value })}
-          title="Cache Write % of multiplied delta (default 70%)"
+          title="Cache Write % of multiplied delta (default 0%)"
           className="min-w-0 rounded border border-black/10 bg-white px-1.5 py-1 font-mono text-[10px] outline-none dark:border-white/10 dark:bg-black/20"
         />
       )}

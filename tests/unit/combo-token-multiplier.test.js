@@ -6,13 +6,19 @@ import {
   markClientTokenUsagePolicy,
 } from "../../open-sse/utils/reasoningUsagePolicy.js";
 
-function policy({ input = [{ upTo: null, multiplierMin: 2, multiplierMax: 2, power: 1 }], output = [{ upTo: null, multiplierMin: 3, multiplierMax: 3, power: 1 }] } = {}) {
-  const body = markClientTokenUsagePolicy({ model: "test" }, { input, output });
+function policy({
+  input = [{ upTo: null, multiplierMin: 2, multiplierMax: 2, power: 1 }],
+  output = [{ upTo: null, multiplierMin: 3, multiplierMax: 3, power: 1 }],
+  cacheCreationRatio,
+} = {}) {
+  const policyObj = { input, output };
+  if (cacheCreationRatio !== undefined) policyObj.cacheCreationRatio = cacheCreationRatio;
+  const body = markClientTokenUsagePolicy({ model: "test" }, policyObj);
   return createClientTokenUsagePolicy(body);
 }
 
 describe("API-key client token multiplier", () => {
-  it("scales the full OpenAI input total and allocates 70% of delta to cache_creation_tokens", () => {
+  it("defaults to 0% cache write when cacheCreationRatio is not configured", () => {
     const payload = {
       usage: {
         prompt_tokens: 100,
@@ -26,6 +32,30 @@ describe("API-key client token multiplier", () => {
     applyClientTokenUsagePolicy(payload, policy(), () => 0);
 
     // 100 -> 200, delta = 100.
+    // Default ratio is 0%, so cache_creation_tokens stays untouched at 5.
+    expect(payload.usage).toEqual({
+      prompt_tokens: 200,
+      completion_tokens: 30,
+      total_tokens: 230,
+      cached_tokens: 80,
+      prompt_tokens_details: { cached_tokens: 80, cache_creation_tokens: 5 },
+    });
+  });
+
+  it("scales the full OpenAI input total and allocates 70% of delta when cacheCreationRatio is 0.7", () => {
+    const payload = {
+      usage: {
+        prompt_tokens: 100,
+        completion_tokens: 10,
+        total_tokens: 999,
+        cached_tokens: 80,
+        prompt_tokens_details: { cached_tokens: 80, cache_creation_tokens: 5 },
+      },
+    };
+
+    applyClientTokenUsagePolicy(payload, policy({ cacheCreationRatio: 0.7 }), () => 0);
+
+    // 100 -> 200, delta = 100.
     // extraCacheWrite = floor(100 * 0.7) = 70.
     // cache_creation_tokens = 5 + 70 = 75.
     expect(payload.usage).toEqual({
@@ -37,7 +67,7 @@ describe("API-key client token multiplier", () => {
     });
   });
 
-  it("scales the full Responses input total and allocates 70% of delta to cache_creation_tokens", () => {
+  it("scales the full Responses input total and allocates 70% of delta when cacheCreationRatio is 0.7", () => {
     const payload = {
       object: "response",
       usage: {
@@ -47,7 +77,7 @@ describe("API-key client token multiplier", () => {
       },
     };
 
-    applyClientTokenUsagePolicy(payload, policy(), () => 0);
+    applyClientTokenUsagePolicy(payload, policy({ cacheCreationRatio: 0.7 }), () => 0);
 
     // 100 -> 200, delta = 100.
     // extraCacheWrite = floor(100 * 0.7) = 70.
@@ -59,7 +89,7 @@ describe("API-key client token multiplier", () => {
     });
   });
 
-  it("scales Claude's cache-inclusive total and allocates 70% of delta to cache_creation_input_tokens", () => {
+  it("scales Claude's cache-inclusive total and allocates 70% of delta when cacheCreationRatio is 0.7", () => {
     const payload = {
       type: "message",
       usage: {
@@ -70,7 +100,10 @@ describe("API-key client token multiplier", () => {
       },
     };
 
-    applyClientTokenUsagePolicy(payload, policy({ input: [{ upTo: 220, multiplierMin: 2, multiplierMax: 2, power: 1 }] }), () => 0);
+    applyClientTokenUsagePolicy(payload, policy({
+      input: [{ upTo: 220, multiplierMin: 2, multiplierMax: 2, power: 1 }],
+      cacheCreationRatio: 0.7,
+    }), () => 0);
 
     // basis = 20 + 80 + 5 = 105.
     // 2x -> 210, delta = 105.
@@ -156,6 +189,7 @@ describe("API-key client token multiplier", () => {
     applyClientTokenUsagePolicy(payload, policy({
       input: [{ upTo: null, multiplierMin: 2, multiplierMax: 2, power: 1 }],
       output: [{ upTo: null, multiplierMin: 1, multiplierMax: 1, power: 1 }],
+      cacheCreationRatio: 0.7,
     }), () => 0);
 
     expect(payload.usage).toEqual({
@@ -181,6 +215,7 @@ describe("API-key client token multiplier", () => {
     applyClientTokenUsagePolicy(payload, policy({
       input: [{ upTo: null, multiplierMin: 2, multiplierMax: 2, power: 1 }],
       output: [{ upTo: null, multiplierMin: 1, multiplierMax: 1, power: 1 }],
+      cacheCreationRatio: 0.7,
     }), () => 0);
 
     expect(payload.usage).toEqual({
@@ -209,6 +244,7 @@ describe("API-key client token multiplier", () => {
     applyClientTokenUsagePolicy(payload, policy({
       input: [{ upTo: null, multiplierMin: 2, multiplierMax: 2, power: 1 }],
       output: [{ upTo: null, multiplierMin: 1, multiplierMax: 1, power: 1 }],
+      cacheCreationRatio: 0.7,
     }), () => 0);
 
     expect(payload.usage).toEqual({
@@ -234,6 +270,7 @@ describe("API-key client token multiplier", () => {
     applyClientTokenUsagePolicy(payload, policy({
       input: [{ upTo: null, multiplierMin: 2, multiplierMax: 2, power: 1 }],
       output: [{ upTo: null, multiplierMin: 1, multiplierMax: 1, power: 1 }],
+      cacheCreationRatio: 0.7,
     }), () => 0);
 
     expect(payload.usage).toEqual({

@@ -109,6 +109,7 @@ export async function handleFetch(request) {
       comboName: providerInput,
       comboStrategy,
       comboStickyLimit,
+      inputRouting: comboStrategies[providerInput]?.inputRouting,
     });
   }
 

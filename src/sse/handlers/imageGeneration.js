@@ -92,6 +92,7 @@ export async function handleImageGeneration(request) {
       comboName: modelStr,
       comboStrategy,
       comboStickyLimit,
+      inputRouting: comboStrategies[modelStr]?.inputRouting,
     });
   }
 

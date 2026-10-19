@@ -6,6 +6,7 @@ import {
   shouldRefreshCredentials,
 } from "../services/oauthCredentialManager.js";
 import { normalizeResponsesInput } from "../translator/formats/responsesApi.js";
+import { parseSuffix } from "../translator/concerns/thinkingUnified.js";
 import { fetchImageAsBase64 } from "../translator/concerns/image.js";
 import { getModelUpstreamId } from "../config/providerModels.js";
 import { getThinkingLevels } from "../providers/thinkingLevels.js";
@@ -65,6 +66,32 @@ function convertSystemToDeveloperRole(body) {
   }
 }
 
+const CODEX_ITEM_ID_PREFIXES = {
+  message: "msg_",
+  reasoning: "rs_",
+  function_call: "fc_",
+  function_call_output: "fc_",
+  custom_tool_call: "ctc_",
+  custom_tool_call_output: "ctco_",
+};
+const CODEX_ITEM_ID_PREFIX_RE = /^(?:(?:msg|rs|fc|ctc|ctco|item)_)+/;
+
+// Codex validates Responses item IDs by item type. Histories can come from a
+// different provider with generic `item_`/`call_` IDs, so normalize those IDs
+// before sending while keeping call_id unchanged for tool-call correlation.
+function normalizeCodexItemId(item) {
+  const prefix = CODEX_ITEM_ID_PREFIXES[item?.type];
+  if (!prefix || typeof item.id !== "string" || !item.id) return;
+  if (SERVER_ID_PATTERN.test(item.id)) {
+    delete item.id;
+    return;
+  }
+  // Replace any provider/previous-router prefix instead of stacking prefixes
+  // (`ctc_ctco_...`), while leaving the provider's opaque call id intact.
+  const suffix = item.id.replace(CODEX_ITEM_ID_PREFIX_RE, "");
+  item.id = `${prefix}${suffix || item.id}`;
+}
+
 // Strip server-generated item IDs (rs_/fc_/resp_/msg_) from input — avoids 404 with store=false
 function stripStoredItemReferences(body) {
   if (!Array.isArray(body.input)) return;
@@ -72,7 +99,7 @@ function stripStoredItemReferences(body) {
     if (typeof item === "string" && SERVER_ID_PATTERN.test(item)) return false;
     if (item && typeof item === "object" && !Array.isArray(item)) {
       if (item.type === "item_reference") return false;
-      if (typeof item.id === "string" && SERVER_ID_PATTERN.test(item.id)) delete item.id;
+      normalizeCodexItemId(item);
     }
     return true;
   });
@@ -462,16 +489,20 @@ export class CodexExecutor extends BaseExecutor {
       body.prompt_cache_key = this._currentSessionId;
     }
 
-    // Extract thinking level from model name suffix
-    // e.g., gpt-5.3-codex-high → high, gpt-5.3-codex → medium (default)
+    // Extract thinking level from model name suffix. Both `model(low)` and
+    // `model-low` normalize to the base model plus reasoning.effort=low.
     const effortLevels = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
-    let modelEffort = null;
-    for (const level of effortLevels) {
-      if (body.model.endsWith(`-${level}`)) {
-        modelEffort = level;
-        // Strip suffix from model name for actual API call
-        body.model = body.model.replace(`-${level}`, '');
-        break;
+    const suffix = parseSuffix(body.model);
+    let modelEffort = suffix.override?.mode === "level" ? suffix.override.level : null;
+    if (suffix.override?.mode === "none") modelEffort = "none";
+    if (suffix.override) body.model = suffix.cleanModel;
+    if (!modelEffort) {
+      for (const level of effortLevels) {
+        if (body.model.endsWith(`-${level}`)) {
+          modelEffort = level;
+          body.model = body.model.slice(0, -(level.length + 1));
+          break;
+        }
       }
     }
 

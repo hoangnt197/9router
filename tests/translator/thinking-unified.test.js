@@ -3,6 +3,7 @@
 import { describe, it, expect } from "vitest";
 import {
   parseSuffix,
+  stripThinkingSuffix,
   extractThinking,
   applyThinking,
 } from "../../open-sse/translator/concerns/thinkingUnified.js";
@@ -23,6 +24,13 @@ describe("parseSuffix", () => {
       cleanModel: "gpt-5.6-sol",
       override: { mode: "level", level: "ultra" },
     });
+  });
+  it.each(["gpt-6-luna(low)", "gpt-6-luna-low"])("parses low suffix form %s", (model) => {
+    expect(parseSuffix(model)).toEqual({
+      cleanModel: "gpt-6-luna",
+      override: { mode: "level", level: "low" },
+    });
+    expect(stripThinkingSuffix(model)).toBe("gpt-6-luna");
   });
   it("parses numeric budget suffix", () => {
     expect(parseSuffix("model(8192)")).toEqual({ cleanModel: "model", override: { mode: "budget", budget: 8192 } });

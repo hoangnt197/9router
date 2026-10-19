@@ -54,6 +54,36 @@ describe("Codex GPT-6 Sol/Luna transport", () => {
     expect(body.reasoning).toEqual({ effort: "high", context: "all_turns" });
   });
 
+  it.each(["gpt-6-luna(low)", "gpt-6-luna-low"])("normalizes %s before the Codex request", (model) => {
+    const body = new CodexExecutor().transformRequest(model, {
+      model, input: "hello",
+    }, true, credentials);
+
+    expect(body.model).toBe("gpt-6-luna");
+    expect(body.reasoning).toMatchObject({ effort: "low", summary: "auto" });
+  });
+
+  it("normalizes cross-provider Responses item IDs by item type", () => {
+    const body = new CodexExecutor().transformRequest("gpt-6-luna", {
+      model: "gpt-6-luna",
+      input: [
+        { type: "message", id: "item_message", role: "user", content: [{ type: "input_text", text: "hello" }] },
+        { type: "reasoning", id: "item_reasoning", summary: [] },
+        { type: "function_call", id: "call_function", call_id: "call_function", name: "run", arguments: "{}" },
+        { type: "custom_tool_call", id: "call_custom", call_id: "call_custom", name: "run", input: "{}" },
+        { type: "custom_tool_call_output", id: "ctc_ctco_call_custom_output", call_id: "call_custom", output: "{}" },
+      ],
+    }, true, credentials);
+
+    expect(body.input.map((item) => item.id)).toEqual([
+      "msg_message",
+      "rs_reasoning",
+      "fc_call_function",
+      "ctc_call_custom",
+      "ctco_call_custom_output",
+    ]);
+  });
+
   it.each(["gpt-6-sol", "gpt-6-luna"])("keeps hosted web_search available on %s", async (model) => {
     const fetchMock = vi.spyOn(proxyFetchModule, "proxyAwareFetch").mockResolvedValue({
       ok: true, status: 200, headers: new Map(),

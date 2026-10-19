@@ -89,6 +89,7 @@ export async function handleSearch(request) {
       comboName: providerInput,
       comboStrategy,
       comboStickyLimit,
+      inputRouting: comboStrategies[providerInput]?.inputRouting,
     });
   }
 

@@ -54,6 +54,7 @@ export default function ComboDetailPage() {
   const [nameError, setNameError] = useState("");
   const [providers, setProviders] = useState([]);
   const [roundRobin, setRoundRobin] = useState(false);
+  const [strictInputBands, setStrictInputBands] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [logs, setLogs] = useState([]);
   const [testing, setTesting] = useState(false);
@@ -86,6 +87,7 @@ export default function ComboDetailPage() {
       setProviders(c.models || []);
       const s = settingsRes.ok ? await settingsRes.json() : {};
       setRoundRobin(s.comboStrategies?.[c.name]?.fallbackStrategy === "round-robin");
+      setStrictInputBands(s.comboStrategies?.[c.name]?.inputRouting === "band-strict");
       const allLogs = logsRes.ok ? await logsRes.json() : [];
       setLogs(allLogs.filter((l) => typeof l === "string" && l.includes(c.name)).slice(0, 50));
     } catch { /* noop */ }
@@ -155,7 +157,27 @@ export default function ComboDetailPage() {
     const settingsRes = await fetch("/api/settings", { cache: "no-store" });
     const s = settingsRes.ok ? await settingsRes.json() : {};
     const updated = { ...(s.comboStrategies || {}) };
-    if (enabled) updated[combo.name] = { fallbackStrategy: "round-robin" };
+    const current = { ...(updated[combo.name] || {}) };
+    if (enabled) current.fallbackStrategy = "round-robin";
+    else delete current.fallbackStrategy;
+    if (Object.keys(current).length > 0) updated[combo.name] = current;
+    else delete updated[combo.name];
+    await fetch("/api/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ comboStrategies: updated }),
+    });
+  };
+
+  const handleToggleStrictInputBands = async (enabled) => {
+    setStrictInputBands(enabled);
+    const settingsRes = await fetch("/api/settings", { cache: "no-store" });
+    const s = settingsRes.ok ? await settingsRes.json() : {};
+    const updated = { ...(s.comboStrategies || {}) };
+    const current = { ...(updated[combo.name] || {}) };
+    if (enabled) current.inputRouting = "band-strict";
+    else delete current.inputRouting;
+    if (Object.keys(current).length > 0) updated[combo.name] = current;
     else delete updated[combo.name];
     await fetch("/api/settings", {
       method: "PATCH",
@@ -275,6 +297,13 @@ export default function ComboDetailPage() {
               <p className="text-xs text-text-muted">Rotate providers across requests instead of strict fallback order.</p>
             </div>
             <Toggle checked={roundRobin} onChange={handleToggleRoundRobin} />
+          </div>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">Strict input bands</p>
+              <p className="text-xs text-text-muted">Route only to the configured max-input band; do not fall through to a larger band.</p>
+            </div>
+            <Toggle checked={strictInputBands} onChange={handleToggleStrictInputBands} />
           </div>
         </div>
       </Card>

@@ -80,7 +80,7 @@ export function markComboModelRequest(body, modelItem = null, comboName = null) 
   return body;
 }
 
-export const CACHE_CREATION_RATIO = 0.7;
+export const CACHE_CREATION_RATIO = 0;
 
 /** Attach the API-key-owned presentation policy without forwarding it upstream. */
 export function markClientTokenUsagePolicy(body, policy = null) {
@@ -90,7 +90,8 @@ export function markClientTokenUsagePolicy(body, policy = null) {
     const policyObj = { input, output };
     if (policy?.cacheCreationRatio !== undefined) {
       const r = Number(policy.cacheCreationRatio);
-      if (Number.isFinite(r) && r >= 0 && r <= 1) policyObj.cacheCreationRatio = r;
+      const normalizedR = r > 1 && r <= 100 ? r / 100 : r;
+      if (Number.isFinite(normalizedR) && normalizedR >= 0 && normalizedR <= 1) policyObj.cacheCreationRatio = normalizedR;
     }
     Object.defineProperty(body, CLIENT_TOKEN_USAGE_POLICY, {
       value: policyObj, enumerable: false,

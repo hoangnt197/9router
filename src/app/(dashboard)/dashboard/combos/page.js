@@ -165,8 +165,9 @@ export default function CombosPage() {
     try {
       const updated = { ...comboStrategies };
       const next = { ...(updated[comboName] || {}), ...patch };
+      if (next.inputRouting === null) delete next.inputRouting;
       // Prune to keep settings clean: default fallback with no extras = no entry.
-      if (!next.fallbackStrategy || next.fallbackStrategy === "fallback") {
+      if ((!next.fallbackStrategy || next.fallbackStrategy === "fallback") && !next.inputRouting && !next.judgeModel) {
         delete updated[comboName];
       } else {
         updated[comboName] = next;
@@ -301,6 +302,7 @@ function ComboCard({ combo, getCaps, activeProviders = [], copied, onCopy, onEdi
   const current = strategy.fallbackStrategy || "fallback";
   const judge = strategy.judgeModel || "";
   const isFusion = current === "fusion";
+  const strictInputBands = strategy.inputRouting === "band-strict";
   const firstModelName = typeof combo.models?.[0] === "object" ? combo.models[0]?.model : combo.models?.[0];
 
   return (
@@ -398,6 +400,15 @@ function ComboCard({ combo, getCaps, activeProviders = [], copied, onCopy, onEdi
               onChange={(e) => onSetStrategy({ fallbackStrategy: e.target.value })}
               selectClassName="py-1.5 text-xs"
             />
+          </div>
+
+          <div className="flex items-center gap-1.5" title="Route only within the configured max-input token band">
+            <Toggle
+              checked={strictInputBands}
+              onChange={(enabled) => onSetStrategy({ inputRouting: enabled ? "band-strict" : null })}
+              aria-label="Strict input bands"
+            />
+            <span className="text-[10px] leading-tight text-text-muted whitespace-nowrap">Strict bands</span>
           </div>
 
           <div className="grid grid-cols-3 gap-1 sm:flex">

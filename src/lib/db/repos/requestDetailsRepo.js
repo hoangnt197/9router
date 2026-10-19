@@ -111,6 +111,12 @@ export async function getRequestDetailById(id) {
   return row ? parseJson(row.data, null) : null;
 }
 
+export async function clearRequestDetails() {
+  const db = await getAdapter();
+  const result = await db.run("DELETE FROM requestdetails");
+  return Number(result?.changes || 0);
+}
+
 export async function getDistinctProviders() {
   const db = await getAdapter();
   const rows = await db.all(`SELECT DISTINCT provider FROM requestdetails WHERE provider IS NOT NULL ORDER BY provider ASC`);
