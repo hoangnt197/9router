@@ -70,6 +70,15 @@ export class BedrockExecutor extends BaseExecutor {
     // spread because a claude-format client may carry its own (e.g. "2023-06-01"), and letting
     // that win earns a ValidationException.
     if (!this.isClaudeWire) return rest;
+    // Bedrock strictly enforces temperature=1 (or omitted) when thinking is active (extended or adaptive)
+    if (rest.thinking?.type === "enabled" || rest.thinking?.type === "adaptive" || rest.output_config?.effort) {
+      if (rest.temperature !== undefined && rest.temperature !== 1) {
+        delete rest.temperature;
+      }
+      if (rest.top_p !== undefined) {
+        delete rest.top_p;
+      }
+    }
     return { ...rest, anthropic_version: BEDROCK.anthropicVersion };
   }
 

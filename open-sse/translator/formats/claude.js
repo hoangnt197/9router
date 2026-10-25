@@ -718,5 +718,15 @@ export function prepareClaudeRequest(body, provider = null, apiKey = null, conne
     body = applyCloaking(body, apiKey, sid);
   }
 
+  // Anthropic / Bedrock: temperature may only be 1 (or omitted) when thinking is active
+  if (body.thinking?.type === "enabled" || body.thinking?.type === "adaptive" || body.output_config?.effort) {
+    if (body.temperature !== undefined && body.temperature !== 1) {
+      delete body.temperature;
+    }
+    if (body.top_p !== undefined) {
+      delete body.top_p;
+    }
+  }
+
   return body;
 }

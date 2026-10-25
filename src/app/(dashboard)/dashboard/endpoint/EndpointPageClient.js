@@ -22,13 +22,17 @@ import KeyAccessControls from "./components/KeyAccessControls";
 
 function KeyTokenRuleEditor({ label, rules = [], onChange }) {
   const isInput = label.toLowerCase().includes("input");
-  const update = (index, patch) => onChange(rules.map((rule, i) => i === index ? { ...rule, ...patch } : rule));
+  const update = (index, patch) => onChange(rules.map((rule, i) => {
+    if (i !== index) return rule;
+    const next = { ...rule, ...patch };
+    return next;
+  }));
   return <div className="space-y-1.5 rounded border border-black/5 p-2 dark:border-white/5">
     <div className="flex items-center justify-between">
       <span className="text-xs font-medium">{label}</span>
       <button
         type="button"
-        onClick={() => onChange([...rules, { upTo: null, multiplierMin: 1, multiplierMax: "", power: 1, ...(isInput ? { cacheCreationRatio: "" } : {}) }])}
+        onClick={() => onChange([...rules, { upTo: null, multiplierMin: 1, multiplierMax: "", power: 1, ...(isInput ? { cacheReadRatio: "" } : {}) }])}
         className="text-[10px] text-primary hover:underline"
       >
         + Add tier
@@ -48,14 +52,15 @@ function KeyTokenRuleEditor({ label, rules = [], onChange }) {
           step="1"
           placeholder="0%"
           value={
-            rule.cacheCreationRatio === "" || rule.cacheCreationRatio === null || rule.cacheCreationRatio === undefined
+            (() => {
+              const ratio = rule.cacheReadRatio;
+              return ratio === "" || ratio === null || ratio === undefined
               ? ""
-              : (Number(rule.cacheCreationRatio) <= 1 && Number(rule.cacheCreationRatio) > 0
-                  ? Math.round(Number(rule.cacheCreationRatio) * 100)
-                  : rule.cacheCreationRatio)
+              : (Number(ratio) <= 1 && Number(ratio) > 0 ? Math.round(Number(ratio) * 100) : ratio);
+            })()
           }
-          onChange={(e) => update(index, { cacheCreationRatio: e.target.value })}
-          title="Cache Write % of multiplied delta (default 0%)"
+          onChange={(e) => update(index, { cacheReadRatio: e.target.value })}
+          title="Cache Read % of multiplied delta (default 0%)"
           className="min-w-0 rounded border border-black/10 bg-white px-1.5 py-1 font-mono text-[10px] outline-none dark:border-white/10 dark:bg-black/20"
         />
       )}
@@ -67,7 +72,7 @@ function KeyTokenRuleEditor({ label, rules = [], onChange }) {
         <span>Min ×</span>
         <span>Max ×</span>
         <span>Power</span>
-        {isInput && <span>Cache %</span>}
+        {isInput && <span>Cache Read %</span>}
       </div>
     )}
   </div>;

@@ -21,13 +21,13 @@ export function normalizeTokenRules(rules) {
     if (upTo !== null && (!Number.isFinite(upTo) || upTo < 1)) return null;
     const powerValue = Number(rule.power);
 
-    const rawRatio = rule.cacheCreationRatio ?? rule.cacheWriteRatio;
-    let cacheCreationRatio = undefined;
+    const rawRatio = rule.cacheReadRatio;
+    let cacheReadRatio = undefined;
     if (rawRatio !== null && rawRatio !== undefined && rawRatio !== "") {
       const r = Number(rawRatio);
       const normalizedR = r > 1 && r <= 100 ? r / 100 : r;
       if (Number.isFinite(normalizedR) && normalizedR >= 0 && normalizedR <= 1) {
-        cacheCreationRatio = Number(normalizedR.toFixed(4));
+        cacheReadRatio = Number(normalizedR.toFixed(4));
       }
     }
 
@@ -36,7 +36,7 @@ export function normalizeTokenRules(rules) {
       multiplierMin: min,
       multiplierMax: max,
       power: Number.isFinite(powerValue) && powerValue > 0 ? powerValue : 1,
-      ...(cacheCreationRatio !== undefined ? { cacheCreationRatio } : {}),
+      ...(cacheReadRatio !== undefined ? { cacheReadRatio } : {}),
     };
   }).filter(Boolean);
 

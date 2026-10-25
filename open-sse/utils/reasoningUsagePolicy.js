@@ -26,13 +26,13 @@ function normalizeTokenRules(rules) {
     const upTo = rawUpTo === null || rawUpTo === undefined || rawUpTo === "" ? null : Math.floor(Number(rawUpTo));
     if (upTo !== null && (!Number.isFinite(upTo) || upTo < 1)) continue;
     const powerValue = Number(rule?.power);
-    const rawRatio = rule?.cacheCreationRatio ?? rule?.cacheWriteRatio;
-    let cacheCreationRatio = undefined;
+    const rawRatio = rule?.cacheReadRatio;
+    let cacheReadRatio = undefined;
     if (rawRatio !== null && rawRatio !== undefined && rawRatio !== "") {
       const r = Number(rawRatio);
       const normalizedR = r > 1 && r <= 100 ? r / 100 : r;
       if (Number.isFinite(normalizedR) && normalizedR >= 0 && normalizedR <= 1) {
-        cacheCreationRatio = Number(normalizedR.toFixed(4));
+        cacheReadRatio = Number(normalizedR.toFixed(4));
       }
     }
     const normalized = {
@@ -40,7 +40,7 @@ function normalizeTokenRules(rules) {
       multiplierMin: min,
       multiplierMax: max,
       power: Number.isFinite(powerValue) && powerValue > 0 ? powerValue : 1,
-      ...(cacheCreationRatio !== undefined ? { cacheCreationRatio } : {}),
+      ...(cacheReadRatio !== undefined ? { cacheReadRatio } : {}),
     };
     if (upTo === null) unlimited ||= normalized;
     else finite.push(normalized);
@@ -80,7 +80,7 @@ export function markComboModelRequest(body, modelItem = null, comboName = null) 
   return body;
 }
 
-export const CACHE_CREATION_RATIO = 0;
+export const CACHE_READ_RATIO = 0;
 
 /** Attach the API-key-owned presentation policy without forwarding it upstream. */
 export function markClientTokenUsagePolicy(body, policy = null) {
@@ -88,10 +88,11 @@ export function markClientTokenUsagePolicy(body, policy = null) {
   const output = normalizeTokenRules(policy?.output);
   if (input.length || output.length) {
     const policyObj = { input, output };
-    if (policy?.cacheCreationRatio !== undefined) {
-      const r = Number(policy.cacheCreationRatio);
+    const configuredRatio = policy?.cacheReadRatio;
+    if (configuredRatio !== undefined) {
+      const r = Number(configuredRatio);
       const normalizedR = r > 1 && r <= 100 ? r / 100 : r;
-      if (Number.isFinite(normalizedR) && normalizedR >= 0 && normalizedR <= 1) policyObj.cacheCreationRatio = normalizedR;
+      if (Number.isFinite(normalizedR) && normalizedR >= 0 && normalizedR <= 1) policyObj.cacheReadRatio = normalizedR;
     }
     Object.defineProperty(body, CLIENT_TOKEN_USAGE_POLICY, {
       value: policyObj, enumerable: false,
@@ -227,41 +228,47 @@ function applyUsageMultiplier(usage, inputKey, outputKey, totalKey, policy, rand
   const { value: nextInputTotal, rule: matchedInputRule } = appliedTokenValueWithRule(inputBasis, policy?.input, random);
 
   const delta = Math.max(0, nextInputTotal - inputBasis);
-  const tierRatio = matchedInputRule?.cacheCreationRatio;
-  const creationRatio = (Number.isFinite(tierRatio) && tierRatio >= 0 && tierRatio <= 1)
+  const tierRatio = matchedInputRule?.cacheReadRatio;
+  const readRatio = (Number.isFinite(tierRatio) && tierRatio >= 0 && tierRatio <= 1)
     ? tierRatio
-    : (policy?.cacheCreationRatio ?? CACHE_CREATION_RATIO);
-  const extraCacheWrite = (!options.isGemini && delta > 0)
-    ? Math.floor(delta * creationRatio)
+    : (policy?.cacheReadRatio ?? CACHE_READ_RATIO);
+  const extraCacheRead = delta > 0
+    ? Math.floor(delta * readRatio)
     : 0;
+
+  if (options.isGemini && extraCacheRead > 0) {
+    usage.cachedContentTokenCount = (Number(usage.cachedContentTokenCount) || 0) + extraCacheRead;
+  }
 
   const isClaude = inputKey === "input_tokens" && !options.isResponses;
 
   if (isClaude) {
     const cacheRead = Number(usage.cache_read_input_tokens) || 0;
     const curCacheWrite = Number(usage.cache_creation_input_tokens) || 0;
-    const nextCacheWrite = curCacheWrite + extraCacheWrite;
-    if (nextCacheWrite > 0) {
-      usage.cache_creation_input_tokens = nextCacheWrite;
-    }
-    const nextInput = Math.max(0, nextInputTotal - cacheRead - nextCacheWrite);
+    const nextCacheRead = cacheRead + extraCacheRead;
+    if (nextCacheRead > 0) usage.cache_read_input_tokens = nextCacheRead;
+    const nextInput = Math.max(0, nextInputTotal - nextCacheRead - curCacheWrite);
     if (Number.isFinite(nextInput)) usage[inputKey] = nextInput;
   } else {
     if (options.isResponses) {
-      if (extraCacheWrite > 0) {
+      if (extraCacheRead > 0) {
         usage.input_tokens_details = usage.input_tokens_details && typeof usage.input_tokens_details === "object"
           ? usage.input_tokens_details
           : {};
-        const curCacheWrite = Number(usage.input_tokens_details.cache_creation_tokens ?? usage.input_tokens_details.cache_creation_input_tokens) || 0;
-        usage.input_tokens_details.cache_creation_tokens = curCacheWrite + extraCacheWrite;
+        const curCacheRead = Number(usage.input_tokens_details.cached_tokens ?? usage.input_tokens_details.cache_read_input_tokens) || 0;
+        usage.input_tokens_details.cached_tokens = curCacheRead + extraCacheRead;
       }
     } else if (inputKey === "prompt_tokens") {
-      if (extraCacheWrite > 0) {
+      if (extraCacheRead > 0) {
         usage.prompt_tokens_details = usage.prompt_tokens_details && typeof usage.prompt_tokens_details === "object"
           ? usage.prompt_tokens_details
           : {};
-        const curCacheWrite = Number(usage.prompt_tokens_details.cache_creation_tokens ?? usage.prompt_tokens_details.cache_creation_input_tokens) || 0;
-        usage.prompt_tokens_details.cache_creation_tokens = curCacheWrite + extraCacheWrite;
+        const curCacheRead = Number(usage.prompt_tokens_details.cached_tokens ?? usage.prompt_tokens_details.cache_read_input_tokens) || 0;
+        usage.prompt_tokens_details.cached_tokens = curCacheRead + extraCacheRead;
+      }
+      if (extraCacheRead > 0 && usage.cached_tokens !== undefined) {
+        // OpenAI's top-level cached_tokens mirrors prompt_tokens_details.
+        usage.cached_tokens = Number(usage.prompt_tokens_details.cached_tokens) || 0;
       }
     }
     if (Number.isFinite(nextInputTotal)) usage[inputKey] = nextInputTotal;

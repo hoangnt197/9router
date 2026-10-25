@@ -17,6 +17,39 @@ function sanitizeFunctionName(name) {
   return s.substring(0, 64);
 }
 
+// Cloud Code's protobuf Schema uses enum names (OBJECT, STRING, ARRAY, ...),
+// unlike the lowercase JSON-Schema spelling accepted by OpenAI clients. Some
+// callers also send shorthand property values such as { path: "string" }.
+// Normalize both forms before serializing the Antigravity request.
+function normalizeAntigravitySchema(schema) {
+  if (!schema || typeof schema !== "object") return schema;
+
+  if (typeof schema.type === "string") {
+    schema.type = schema.type.toUpperCase();
+  }
+
+  if (schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties)) {
+    for (const [name, value] of Object.entries(schema.properties)) {
+      if (typeof value === "string") {
+        schema.properties[name] = { type: value.toUpperCase() };
+      } else if (!value || typeof value !== "object" || Array.isArray(value)) {
+        schema.properties[name] = { type: "STRING" };
+      }
+    }
+    if (Array.isArray(schema.required)) {
+      schema.required = schema.required.filter(name => Object.prototype.hasOwnProperty.call(schema.properties, name));
+      if (schema.required.length === 0) delete schema.required;
+    } else if (schema.required !== undefined) {
+      delete schema.required;
+    }
+  }
+
+  for (const value of Object.values(schema)) {
+    if (value && typeof value === "object") normalizeAntigravitySchema(value);
+  }
+  return schema;
+}
+
 const MAX_RETRY_AFTER_MS = 10000;
 const ANTIGRAVITY_TRANSIENT_RETRY_MAX_MS = 15000;
 const MAX_ANTIGRAVITY_OUTPUT_TOKENS = 64000;
@@ -285,8 +318,8 @@ export class AntigravityExecutor extends BaseExecutor {
             ...fn,
             name,
             parameters: fn.parameters
-              ? cleanJSONSchemaForAntigravity(structuredClone(fn.parameters))
-              : { type: "object", properties: { reason: { type: "string", description: "Brief explanation" } }, required: ["reason"] }
+              ? normalizeAntigravitySchema(cleanJSONSchemaForAntigravity(structuredClone(fn.parameters)))
+              : { type: "OBJECT", properties: { reason: { type: "STRING", description: "Brief explanation" } }, required: ["reason"] }
           });
         }
       }

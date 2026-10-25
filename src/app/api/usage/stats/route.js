@@ -9,12 +9,26 @@ export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
     const period = searchParams.get("period") || "7d";
+    const startDate = searchParams.get("startDate");
+    const endDate = searchParams.get("endDate");
 
     if (!VALID_PERIODS.has(period)) {
       return NextResponse.json({ error: "Invalid period" }, { status: 400 });
     }
 
-    const stats = await getUsageStats(period);
+    if ((startDate && !endDate) || (!startDate && endDate)) {
+      return NextResponse.json({ error: "Both startDate and endDate are required" }, { status: 400 });
+    }
+
+    if (startDate && endDate) {
+      const start = Date.parse(startDate);
+      const end = Date.parse(endDate);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end) {
+        return NextResponse.json({ error: "Invalid date range" }, { status: 400 });
+      }
+    }
+
+    const stats = await getUsageStats(period, { startDate, endDate });
     return NextResponse.json(stats);
   } catch (error) {
     console.error("[API] Failed to get usage stats:", error);

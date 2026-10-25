@@ -106,7 +106,30 @@ describe("Antigravity executor", () => {
     }, true, { projectId: "project-1", connectionId: "conn-1" });
 
     const query = out.request.tools[0].functionDeclarations[0].parameters.properties.query;
-    expect(query).toEqual({ type: "string", description: "Search query" });
+    expect(query).toEqual({ type: "STRING", description: "Search query" });
+  });
+
+  it("normalizes Cloud Code schema enum types and malformed properties", () => {
+    const out = new AntigravityExecutor().transformRequest("gemini-3.8-flash-low", {
+      request: {
+        contents: [{ role: "user", parts: [{ text: "use the tool" }] }],
+        tools: [{ functionDeclarations: [{
+          name: "lookup",
+          parameters: {
+            type: "object",
+            properties: { query: "string", options: { type: "object", properties: { limit: { type: "integer" } } } },
+            required: ["query", "missing"],
+          },
+        }] }],
+      },
+    }, true, { projectId: "project-1", connectionId: "conn-1" });
+
+    const params = out.request.tools[0].functionDeclarations[0].parameters;
+    expect(params.type).toBe("OBJECT");
+    expect(params.properties.query).toEqual({ type: "STRING" });
+    expect(params.properties.options.type).toBe("OBJECT");
+    expect(params.properties.options.properties.limit.type).toBe("INTEGER");
+    expect(params.required).toEqual(["query"]);
   });
 
   it("does not inject the legacy Antigravity default system prompt for Gemini-backed models", () => {

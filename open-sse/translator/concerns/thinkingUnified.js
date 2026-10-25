@@ -302,12 +302,18 @@ function applyFormat(fmt, body, cfg, caps, supportedLevels, display) {
       body.output_config = { effort: level === "auto" ? "high"
         : level === "minimal" ? "low"
         : level === "xhigh" && !supportedLevels?.includes("xhigh") ? "high" : level };
+      // Anthropic / Bedrock: temperature may only be 1 (or omitted) when thinking is enabled or in adaptive mode.
+      if (body.temperature !== undefined && body.temperature !== 1) delete body.temperature;
+      if (body.top_p !== undefined) delete body.top_p;
       break;
     }
     case "claude-budget": {
       if (none && canDisable) { body.thinking = { type: "disabled" }; break; }
       const budget = toBudget(eff, caps.thinkingRange);
       body.thinking = budget === -1 ? { type: "enabled", ...(display ? { display } : {}) } : { type: "enabled", budget_tokens: budget || 8192, ...(display ? { display } : {}) };
+      // Anthropic / Bedrock: temperature may only be 1 (or omitted) when thinking is enabled or in adaptive mode.
+      if (body.temperature !== undefined && body.temperature !== 1) delete body.temperature;
+      if (body.top_p !== undefined) delete body.top_p;
       break;
     }
     case "gemini-level": {

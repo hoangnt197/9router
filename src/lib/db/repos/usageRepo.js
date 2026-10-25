@@ -32,6 +32,13 @@ const pendingTimers = global._pendingTimers;
 const recentRing = global._recentRing;
 const connCache = global._connectionMapCache;
 const statsEmitTimers = global._statsEmitTimers;
+if (!global._usageWriteQueue) global._usageWriteQueue = [];
+if (!global._usageFlushTimer) global._usageFlushTimer = null;
+if (!global._usageFlushPromise) global._usageFlushPromise = null;
+
+const usageWriteQueue = global._usageWriteQueue;
+const USAGE_BATCH_MAX = 64;
+const USAGE_BATCH_DELAY_MS = 25;
 
 export const statsEmitter = global._statsEmitter;
 
@@ -248,22 +255,19 @@ export async function getActiveRequests() {
   return { activeRequests, recentRequests, errorProvider };
 }
 
-export async function saveRequestUsage(entry) {
-  try {
-    const db = await getAdapter();
+async function persistUsageBatch(entries) {
+  const db = await getAdapter();
+  const insertedEntries = [];
 
-    if (!entry.timestamp) entry.timestamp = new Date().toISOString();
-    entry.cost = await calculateCost(entry.provider, entry.model, entry.tokens);
+  // A batch uses one transaction and updates each day's aggregate once. This
+  // avoids making every concurrent request read/merge/write the same JSON row.
+  await db.transaction(async (tx) => {
+    const days = new Map();
 
-    const tokens = entry.tokens || {};
-    const promptTokens = tokens.prompt_tokens || tokens.input_tokens || 0;
-    const completionTokens = tokens.completion_tokens || tokens.output_tokens || 0;
-
-    let inserted = false;
-
-    // Keep history, the daily aggregate and lifetime counter atomically aligned
-    // across every 9router instance sharing PostgreSQL.
-    await db.transaction(async (tx) => {
+    for (const entry of entries) {
+      const tokens = entry.tokens || {};
+      const promptTokens = tokens.prompt_tokens || tokens.input_tokens || 0;
+      const completionTokens = tokens.completion_tokens || tokens.output_tokens || 0;
       const existing = await tx.get(
         `SELECT id, endpoint FROM usageHistory
          WHERE timestamp = ?
@@ -285,7 +289,7 @@ export async function saveRequestUsage(entry) {
         if (!existing.endpoint && entry.endpoint) {
           await tx.run(`UPDATE usageHistory SET endpoint = ? WHERE id = ?`, [entry.endpoint, existing.id]);
         }
-        return;
+        continue;
       }
 
       await tx.run(
@@ -297,27 +301,76 @@ export async function saveRequestUsage(entry) {
           stringifyJson(tokens), stringifyJson({ ...(entry.meta || {}), comboName: entry.comboName || null, comboTracked: entry.comboTracked === true }),
         ]
       );
+      insertedEntries.push(entry);
 
       const dateKey = getLocalDateKey(entry.timestamp);
-      const row = await tx.get(`SELECT data FROM usageDaily WHERE dateKey = ?`, [dateKey]);
-      const day = row ? parseJson(row.data, {}) : {
-        requests: 0, promptTokens: 0, completionTokens: 0, cost: 0,
-        byProvider: {}, byModel: {}, byAccount: {}, byApiKey: {}, byEndpoint: {}, byCombo: {},
-      };
+      let day = days.get(dateKey);
+      if (!day) {
+        const row = await tx.get(`SELECT data FROM usageDaily WHERE dateKey = ?`, [dateKey]);
+        day = row ? parseJson(row.data, {}) : {
+          requests: 0, promptTokens: 0, completionTokens: 0, cost: 0,
+          byProvider: {}, byModel: {}, byAccount: {}, byApiKey: {}, byEndpoint: {}, byCombo: {},
+        };
+        days.set(dateKey, day);
+      }
       aggregateEntryToDay(day, entry);
-      await tx.run(`INSERT INTO usageDaily(dateKey, data) VALUES(?, ?) ON CONFLICT(dateKey) DO UPDATE SET data = excluded.data`, [dateKey, stringifyJson(day)]);
-
-      // Atomic counter increment in same transaction
-      const cur = await tx.get(`SELECT value FROM _meta WHERE key = 'totalRequestsLifetime'`);
-      const next = (cur ? parseInt(cur.value, 10) : 0) + 1;
-      await tx.run(`INSERT INTO _meta(key, value) VALUES('totalRequestsLifetime', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(next)]);
-      inserted = true;
-    });
-
-    if (inserted) {
-      pushToRing(entry);
-      scheduleStatsEvent("update", 250);
     }
+
+    for (const [dateKey, day] of days) {
+      await tx.run(
+        `INSERT INTO usageDaily(dateKey, data) VALUES(?, ?) ON CONFLICT(dateKey) DO UPDATE SET data = excluded.data`,
+        [dateKey, stringifyJson(day)]
+      );
+    }
+
+    if (insertedEntries.length > 0) {
+      const cur = await tx.get(`SELECT value FROM _meta WHERE key = 'totalRequestsLifetime'`);
+      const next = (cur ? parseInt(cur.value, 10) : 0) + insertedEntries.length;
+      await tx.run(`INSERT INTO _meta(key, value) VALUES('totalRequestsLifetime', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, [String(next)]);
+    }
+  });
+
+  return insertedEntries;
+}
+
+async function flushUsageQueue() {
+  if (global._usageFlushPromise) return global._usageFlushPromise;
+  global._usageFlushPromise = (async () => {
+    while (usageWriteQueue.length > 0) {
+      const batch = usageWriteQueue.splice(0, USAGE_BATCH_MAX);
+      try {
+        const inserted = await persistUsageBatch(batch.map((item) => item.entry));
+        for (const item of batch) item.resolve();
+        for (const entry of inserted) pushToRing(entry);
+        if (inserted.length > 0) scheduleStatsEvent("update", 250);
+      } catch (error) {
+        for (const item of batch) item.reject(error);
+      }
+    }
+  })().finally(() => {
+    global._usageFlushPromise = null;
+    if (usageWriteQueue.length > 0) scheduleUsageFlush();
+  });
+  return global._usageFlushPromise;
+}
+
+function scheduleUsageFlush() {
+  if (global._usageFlushTimer) return;
+  global._usageFlushTimer = setTimeout(() => {
+    global._usageFlushTimer = null;
+    void flushUsageQueue();
+  }, USAGE_BATCH_DELAY_MS);
+  global._usageFlushTimer.unref?.();
+}
+
+export async function saveRequestUsage(entry) {
+  try {
+    if (!entry.timestamp) entry.timestamp = new Date().toISOString();
+    entry.cost = await calculateCost(entry.provider, entry.model, entry.tokens);
+    await new Promise((resolve, reject) => {
+      usageWriteQueue.push({ entry, resolve, reject });
+      scheduleUsageFlush();
+    });
   } catch (e) {
     console.error("Failed to save usage stats:", e);
   }
@@ -353,8 +406,9 @@ async function loadDaysInRange(adapter, maxDays) {
   return await adapter.all(`SELECT dateKey, data FROM usageDaily WHERE dateKey >= ?`, [cutoffKey]);
 }
 
-export async function getUsageStats(period = "all") {
+export async function getUsageStats(period = "all", range = {}) {
   const db = await getAdapter();
+  const hasCustomRange = Boolean(range.startDate && range.endDate);
 
   const [{ getProviderConnections }, { getApiKeys }, { getProviderNodes }] = await Promise.all([
     import("./connectionsRepo.js"),
@@ -453,7 +507,7 @@ export async function getUsageStats(period = "all") {
     }
   }
 
-  const useDailySummary = period !== "24h" && period !== "today";
+  const useDailySummary = !hasCustomRange && period !== "24h" && period !== "today";
 
   if (useDailySummary) {
     const periodDays = { "7d": 7, "30d": 30, "60d": 60 };
@@ -600,7 +654,9 @@ export async function getUsageStats(period = "all") {
   } else {
     // 24h / today: live history
     let cutoff;
-    if (period === "today") {
+    if (hasCustomRange) {
+      cutoff = new Date(range.startDate).toISOString();
+    } else if (period === "today") {
       const startOfDay = new Date();
       startOfDay.setHours(0, 0, 0, 0);
       cutoff = startOfDay.toISOString();
@@ -608,8 +664,8 @@ export async function getUsageStats(period = "all") {
       cutoff = new Date(Date.now() - PERIOD_MS["24h"]).toISOString();
     }
     const filtered = await db.all(
-      `SELECT timestamp, provider, model, connectionId, apiKey, endpoint, promptTokens, completionTokens, cost, tokens, meta FROM usageHistory WHERE timestamp >= ?`,
-      [cutoff]
+      `SELECT timestamp, provider, model, connectionId, apiKey, endpoint, promptTokens, completionTokens, cost, tokens, meta FROM usageHistory WHERE timestamp >= ?${hasCustomRange ? " AND timestamp <= ?" : ""}`,
+      hasCustomRange ? [cutoff, new Date(range.endDate).toISOString()] : [cutoff]
     );
 
     for (const r of filtered) {
@@ -704,9 +760,32 @@ export async function getUsageStats(period = "all") {
   return stats;
 }
 
-export async function getChartData(period = "7d") {
+export async function getChartData(period = "7d", range = {}) {
   const db = await getAdapter();
   const now = Date.now();
+
+  if (range.startDate && range.endDate) {
+    const startTime = new Date(range.startDate).getTime();
+    const endTime = new Date(range.endDate).getTime();
+    const bucketCount = 24;
+    const bucketMs = Math.max(1, (endTime - startTime) / bucketCount);
+    const buckets = Array.from({ length: bucketCount }, (_, i) => ({
+      label: new Date(startTime + i * bucketMs).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }),
+      tokens: 0, requests: 0, cost: 0,
+    }));
+    const rows = await db.all(
+      `SELECT timestamp, promptTokens, completionTokens, cost FROM usageHistory WHERE timestamp >= ? AND timestamp <= ?`,
+      [new Date(startTime).toISOString(), new Date(endTime).toISOString()]
+    );
+    for (const r of rows) {
+      const index = Math.min(bucketCount - 1, Math.floor((new Date(r.timestamp).getTime() - startTime) / bucketMs));
+      if (index < 0) continue;
+      buckets[index].requests++;
+      buckets[index].tokens += (r.promptTokens || 0) + (r.completionTokens || 0);
+      buckets[index].cost += r.cost || 0;
+    }
+    return buckets;
+  }
 
   if (period === "today") {
     const bucketCount = 24;

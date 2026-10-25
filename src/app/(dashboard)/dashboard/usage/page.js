@@ -6,15 +6,6 @@ import { RequestLogger, CardSkeleton, SegmentedControl } from "@/shared/componen
 import UsageStats from "@/shared/components/UsageStats";
 import RequestDetailsTab from "./components/RequestDetailsTab";
 
-const PERIODS = [
-  { value: "today", label: "Today" },
-  { value: "24h", label: "24h" },
-  { value: "7d", label: "7D" },
-  { value: "30d", label: "30D" },
-  { value: "60d", label: "60D" },
-  { value: "all", label: "All" },
-];
-
 export default function UsagePage() {
   return (
     <Suspense fallback={<CardSkeleton />}>
@@ -27,7 +18,9 @@ function UsageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  const [period, setPeriod] = useState("today");
+  const [dateRange, setDateRange] = useState({ startDate: "", endDate: "" });
+  const [appliedRange, setAppliedRange] = useState(null);
+  const [rangeError, setRangeError] = useState("");
 
   const tabFromUrl = searchParams.get("tab");
   const activeTab = tabFromUrl && ["overview", "logs", "details"].includes(tabFromUrl)
@@ -39,6 +32,30 @@ function UsageContent() {
     const params = new URLSearchParams(searchParams);
     params.set("tab", value);
     router.push(`/dashboard/usage?${params.toString()}`, { scroll: false });
+  };
+
+  const applyDateRange = () => {
+    if (!dateRange.startDate || !dateRange.endDate) {
+      setRangeError("Chọn đủ thời gian bắt đầu và kết thúc.");
+      return;
+    }
+    const start = new Date(dateRange.startDate);
+    const end = new Date(dateRange.endDate);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start >= end) {
+      setRangeError("Thời gian bắt đầu phải trước thời gian kết thúc.");
+      return;
+    }
+    setRangeError("");
+    setAppliedRange({
+      startDate: start.toISOString(),
+      endDate: end.toISOString(),
+    });
+  };
+
+  const clearDateRange = () => {
+    setDateRange({ startDate: "", endDate: "" });
+    setAppliedRange(null);
+    setRangeError("");
   };
 
   return (
@@ -55,19 +72,52 @@ function UsageContent() {
           className="w-full sm:w-auto"
         />
         {activeTab === "overview" && (
-          <SegmentedControl
-            options={PERIODS}
-            value={period}
-            onChange={setPeriod}
-            size="sm"
-            className="w-full sm:w-auto"
-          />
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-end">
+            <label className="flex min-w-0 flex-1 flex-col gap-1 text-xs text-text-muted sm:w-44 sm:flex-none">
+              Bắt đầu
+              <input
+                type="datetime-local"
+                value={dateRange.startDate}
+                onChange={(e) => setDateRange({ ...dateRange, startDate: e.target.value })}
+                className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-text-main focus:outline-none focus:ring-2 focus:ring-primary/50"
+              />
+            </label>
+            <label className="flex min-w-0 flex-1 flex-col gap-1 text-xs text-text-muted sm:w-44 sm:flex-none">
+              Kết thúc
+              <input
+                type="datetime-local"
+                value={dateRange.endDate}
+                onChange={(e) => setDateRange({ ...dateRange, endDate: e.target.value })}
+                className="rounded-lg border border-border bg-surface px-3 py-1.5 text-sm text-text-main focus:outline-none focus:ring-2 focus:ring-primary/50"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={applyDateRange}
+              className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-white transition-colors hover:opacity-90"
+            >
+              Áp dụng
+            </button>
+            {appliedRange && (
+              <button
+                type="button"
+                onClick={clearDateRange}
+                className="rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-text-muted transition-colors hover:bg-bg-hover hover:text-text"
+              >
+                Xóa
+              </button>
+            )}
+          </div>
         )}
       </div>
 
+      {activeTab === "overview" && rangeError && (
+        <p className="-mt-3 text-right text-xs text-error">{rangeError}</p>
+      )}
+
       {activeTab === "overview" && (
         <Suspense fallback={<CardSkeleton />}>
-          <UsageStats period={period} setPeriod={setPeriod} hidePeriodSelector />
+          <UsageStats range={appliedRange} hidePeriodSelector />
         </Suspense>
       )}
       {activeTab === "logs" && <RequestLogger />}

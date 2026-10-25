@@ -56,6 +56,7 @@ export const POSTGRES_SCHEMA_SQL = [
   `CREATE INDEX IF NOT EXISTS idx_combo_name ON combos(name)`,
   `CREATE INDEX IF NOT EXISTS idx_kv_scope ON kv(scope)`,
   `CREATE INDEX IF NOT EXISTS idx_uh_ts ON usagehistory(timestamp DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_uh_dedup ON usagehistory(timestamp, provider, model, connectionid, apikey, prompttokens, completiontokens)`,
   `CREATE INDEX IF NOT EXISTS idx_uh_provider ON usagehistory(provider)`,
   `CREATE INDEX IF NOT EXISTS idx_uh_model ON usagehistory(model)`,
   `CREATE INDEX IF NOT EXISTS idx_uh_conn ON usagehistory(connectionid)`,

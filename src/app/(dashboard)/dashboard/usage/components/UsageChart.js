@@ -34,7 +34,7 @@ const VIEW_CONFIG = {
   cost:     { dataKey: "cost",     color: "#f59e0b", gradId: "gradCost",     formatter: fmtCost,     label: "Cost" },
 };
 
-export default function UsageChart({ period = "7d" }) {
+export default function UsageChart({ period = "7d", range = null }) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState("tokens");
@@ -42,7 +42,12 @@ export default function UsageChart({ period = "7d" }) {
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/usage/chart?period=${period}`);
+      const params = new URLSearchParams({ period: range ? "all" : period });
+      if (range?.startDate && range?.endDate) {
+        params.set("startDate", range.startDate);
+        params.set("endDate", range.endDate);
+      }
+      const res = await fetch(`/api/usage/chart?${params.toString()}`);
       if (res.ok) {
         const json = await res.json();
         setData(json);
@@ -52,7 +57,7 @@ export default function UsageChart({ period = "7d" }) {
     } finally {
       setLoading(false);
     }
-  }, [period]);
+  }, [period, range?.startDate, range?.endDate]);
 
   useEffect(() => {
     fetchData();
