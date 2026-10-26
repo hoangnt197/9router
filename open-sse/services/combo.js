@@ -7,6 +7,7 @@ import { unavailableResponse } from "../utils/error.js";
 import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { parseModel } from "./model.js";
 import { extractTextContent } from "../translator/formats/gemini.js";
+import { estimateInputTokens } from "../utils/inputTokenEstimator.js";
 import { peekStreamForContent, reconstructStream, isNoRetryFinish } from "./emptyFailover.js";
 import {
   getStickyComboModel,
@@ -366,6 +367,25 @@ export async function handleComboChat({
   confidenceThreshold = 0.8,
   resolveSmartChoice = null,
 }) {
+  // Combo members may be legacy strings or objects carrying routing metadata.
+  // Keep metadata long enough to apply context limits, then route by model name.
+  const modelLimits = new Map((Array.isArray(models) ? models : []).map((entry) => {
+    const name = typeof entry === "string" ? entry : entry?.model;
+    const rawLimit = typeof entry === "object" ? entry?.maxInputTokens : null;
+    const limit = Number(rawLimit);
+    return [name, Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : null];
+  }).filter(([name]) => typeof name === "string" && name.length > 0));
+  models = (Array.isArray(models) ? models : []).map((entry) => typeof entry === "string" ? entry : entry?.model).filter(Boolean);
+  const estimatedInputTokens = estimateInputTokens(body);
+  const compatible = models.filter((name) => {
+    const limit = modelLimits.get(name);
+    return !limit || estimatedInputTokens <= limit;
+  });
+  const undersized = models.filter((name) => !compatible.includes(name));
+  if (undersized.length > 0 && compatible.length > 0) {
+    log.info("COMBO", `Input ${estimatedInputTokens} tokens exceeds maxInputTokens for: ${undersized.join(", ")}`);
+    models = [...compatible, ...undersized];
+  }
   let rotatedModels = models;
   let activeStickyModel = null;
 

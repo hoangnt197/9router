@@ -124,7 +124,7 @@ export default function ComboDetailPage() {
   const handleAddModel = async (model) => {
     const value = model?.value || model;
     if (!value || providers.some((p) => (typeof p === "object" && p !== null ? p.model : p) === value)) return;
-    const next = [...providers, { model: value, pricingType: "request", price: null, minPrice: null }];
+    const next = [...providers, { model: value, maxInputTokens: null }];
     setProviders(next);
     await saveCombo({ models: next });
   };
@@ -148,6 +148,18 @@ export default function ComboDetailPage() {
     const swap = idx + dir;
     if (swap < 0 || swap >= next.length) return;
     [next[idx], next[swap]] = [next[swap], next[idx]];
+    setProviders(next);
+    await saveCombo({ models: next });
+  };
+
+  const handleMaxInputChange = async (idx, value) => {
+    const parsed = value === "" ? null : Math.max(1, Math.floor(Number(value)));
+    if (value !== "" && !Number.isFinite(parsed)) return;
+    const next = providers.map((entry, i) => {
+      if (i !== idx) return entry;
+      const model = typeof entry === "object" && entry !== null ? entry.model : entry;
+      return { model, maxInputTokens: parsed };
+    });
     setProviders(next);
     await saveCombo({ models: next });
   };
@@ -341,6 +353,17 @@ export default function ComboDetailPage() {
                     <div className="text-sm font-medium truncate">{p?.name || providerId}</div>
                     {model && <code className="text-[10px] text-text-muted font-mono truncate block">{model}</code>}
                   </div>
+                  <Input
+                    type="number"
+                    min="1"
+                    step="1"
+                    label=""
+                    placeholder="Max input"
+                    value={typeof entry === "object" && entry !== null && entry.maxInputTokens ? entry.maxInputTokens : ""}
+                    onChange={(e) => handleMaxInputChange(idx, e.target.value)}
+                    className="w-28"
+                    title="Maximum input tokens for this combo item"
+                  />
                   <div className="flex items-center gap-0.5">
                     <button onClick={() => handleMove(idx, -1)} disabled={idx === 0} className={`p-1 rounded ${idx === 0 ? "text-text-muted/20" : "text-text-muted hover:text-primary hover:bg-black/5"}`} title="Move up">
                       <span className="material-symbols-outlined text-[16px]">arrow_upward</span>
