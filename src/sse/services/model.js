@@ -75,7 +75,11 @@ export async function getComboModels(modelStr) {
   if (modelStr.includes("/")) return null;
 
   const combo = await getComboByName(modelStr);
-  if (combo && combo.models && combo.models.length > 0) {
+  // Return an empty array for an existing but empty combo as well. An empty
+  // array is truthy, so callers still enter combo handling and can return a
+  // client-visible error that is persisted in Usage Detail. Returning null
+  // here incorrectly treated the combo name as an invalid standalone model.
+  if (combo && Array.isArray(combo.models)) {
     return combo.models;
   }
   return null;

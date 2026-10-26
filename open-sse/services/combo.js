@@ -291,7 +291,7 @@ export function getComboModelsFromData(modelStr, combosData) {
   const combos = Array.isArray(combosData) ? combosData : (combosData?.combos || []);
   
   const combo = combos.find(c => c.name === modelStr);
-  if (combo && combo.models && combo.models.length > 0) {
+  if (combo && Array.isArray(combo.models)) {
     return combo.models;
   }
   return null;
@@ -913,17 +913,43 @@ function collectPanel(calls, { minPanel, stragglerGraceMs, panelHardTimeoutMs })
  * @returns {Promise<Response>}
  */
 export async function handleFusionChat({ body, models, handleSingleModel, log, comboName, judgeModel, tuning }) {
+  const persistFinalResponse = (response) => {
+    const detail = takeDeferredError(response);
+    if (detail) saveRequestDetail(detail).catch(() => {});
+    return response;
+  };
+  const persistSyntheticError = (status, message, response) => {
+    saveRequestDetail({
+      provider: "combo",
+      model: comboName || body?.model || "combo",
+      timestamp: new Date().toISOString(),
+      latency: { ttft: 0, total: 0 },
+      tokens: { prompt_tokens: 0, completion_tokens: 0 },
+      request: {
+        model: body?.model,
+        stream: body?.stream,
+        messages: body?.messages,
+        input: body?.input,
+        contents: body?.contents,
+      },
+      response: { error: message, status },
+      status: "error",
+    }).catch(() => {});
+    return response;
+  };
   const panel = Array.isArray(models) ? models.filter(Boolean) : [];
   if (panel.length === 0) {
-    return new Response(
-      JSON.stringify({ error: { message: "Fusion combo has no models" } }),
-      { status: 400, headers: { "Content-Type": "application/json" } }
+    const message = "Fusion combo has no models";
+    const response = new Response(
+      JSON.stringify({ error: { message } }),
+      { status: 400, headers: { "Content-Type": "application/json" } },
     );
+    return persistSyntheticError(400, message, response);
   }
 
   // A single-model fusion has nothing to fuse — just answer directly.
   if (panel.length === 1) {
-    return handleSingleModel(body, panel[0]);
+    return persistFinalResponse(await handleSingleModel(body, panel[0]));
   }
 
   const cfg = { ...FUSION_DEFAULTS, ...(tuning || {}) };
@@ -976,10 +1002,12 @@ export async function handleFusionChat({ body, models, handleSingleModel, log, c
   // 3. Degrade gracefully when the panel is too thin to fuse.
   if (answers.length === 0) {
     log.warn("FUSION", "All panel models failed");
-    return new Response(
-      JSON.stringify({ error: { message: "All fusion panel models failed" } }),
-      { status: 503, headers: { "Content-Type": "application/json" } }
+    const message = "All fusion panel models failed";
+    const response = new Response(
+      JSON.stringify({ error: { message } }),
+      { status: 503, headers: { "Content-Type": "application/json" } },
     );
+    return persistSyntheticError(503, message, response);
   }
   if (answers.length === 1) {
     log.info("FUSION", `Only ${answers[0].model} succeeded — answering directly (no fusion)`);
@@ -989,7 +1017,7 @@ export async function handleFusionChat({ body, models, handleSingleModel, log, c
   // 4. Judge analyzes + writes one final answer (streams to client if requested).
   const judgeBody = appendUserTurn(body, buildJudgePrompt(answers));
   log.info("FUSION", `Judging ${answers.length} answers with ${judge}`);
-  return handleSingleModel(judgeBody, judge);
+  return persistFinalResponse(await handleSingleModel(judgeBody, judge));
 }
 
 export {
