@@ -347,7 +347,9 @@ export default function CombosPage() {
       const updated = { ...comboStrategies };
       const next = { ...(updated[comboName] || {}), ...patch };
       // Prune to keep settings clean: default fallback with no extras = no entry.
-      if (!next.fallbackStrategy || next.fallbackStrategy === "fallback") {
+      if ((!next.fallbackStrategy || next.fallbackStrategy === "fallback") &&
+          !next.inputRouting && !next.judgeModel && !next.routerModel && !next.smartPolicy &&
+          next.sessionSticky === undefined && next.confidenceThreshold === undefined) {
         delete updated[comboName];
       } else {
         updated[comboName] = next;
@@ -666,6 +668,7 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
   const current = strategy.fallbackStrategy || "fallback";
   const judge = strategy.judgeModel || "";
   const routerModel = strategy.routerModel || "";
+  const strictBands = strategy.inputRouting === "band-strict";
   const isFusion = current === "fusion";
   const isSmart = current === "smart";
   // The synced catalog is server-only, so resolving here would fall back to the
@@ -793,6 +796,16 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
                 </div>
               );
             })()}
+            <div className="mt-2 flex items-center gap-2 text-[11px]">
+              <button
+                type="button"
+                onClick={() => onSetStrategy({ inputRouting: strictBands ? "" : "band-strict" })}
+                className={`rounded border px-2 py-0.5 transition-colors ${strictBands ? "border-primary/60 bg-primary/10 text-primary" : "border-border/70 text-text-muted hover:border-primary/50"}`}
+                title="Route only within the configured max-input token band"
+              >
+                {strictBands ? "Strict bands: on" : "Strict bands: off"}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1086,7 +1099,7 @@ function CapacityAdapterCap({ cap, entry, onChange, activeProviders, getCaps }) 
   );
 }
 
-function ModelItem({ id, index, model, isFirst, isLast, onEdit, onMoveUp, onMoveDown, onRemove }) {
+function ModelItem({ id, index, model, isFirst, isLast, onEdit, onConfigChange, onMoveUp, onMoveDown, onRemove }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useSortable({ id });
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -1150,6 +1163,29 @@ function ModelItem({ id, index, model, isFirst, isLast, onEdit, onMoveUp, onMove
           title="Click to edit"
         >
           {modelId}
+        </div>
+      )}
+
+      {typeof model === "object" && model !== null && (
+        <div className="flex shrink-0 items-center gap-1">
+          <select
+            value={model.pricingType === "token" ? "token" : "request"}
+            onChange={(e) => onConfigChange({ pricingType: e.target.value })}
+            className="h-6 rounded border border-border/60 bg-transparent px-1 text-[10px] text-text-muted"
+            title="Pricing type"
+          >
+            <option value="request">request</option>
+            <option value="token">token</option>
+          </select>
+          <input
+            type="number"
+            min="1"
+            value={model.maxInputTokens ?? ""}
+            onChange={(e) => onConfigChange({ maxInputTokens: e.target.value === "" ? null : Math.max(1, Math.floor(Number(e.target.value))) })}
+            className="h-6 w-20 rounded border border-border/60 bg-transparent px-1 text-[10px] text-text-muted"
+            placeholder="max input"
+            title="Maximum input tokens"
+          />
         </div>
       )}
 
@@ -1335,6 +1371,14 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
                           ? newVal
                           : { ...current, model: newVal };
                         setModels(updated);
+                      }}
+                      onConfigChange={(patch) => {
+                        const updated = [...models];
+                        const current = updated[index];
+                        if (current && typeof current === "object") {
+                          updated[index] = { ...current, ...patch };
+                          setModels(updated);
+                        }
                       }}
                       onMoveUp={() => handleMoveUp(index)}
                       onMoveDown={() => handleMoveDown(index)}
