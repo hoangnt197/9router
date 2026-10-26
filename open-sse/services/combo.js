@@ -376,6 +376,31 @@ export async function handleComboChat({
     if (detail) saveRequestDetail(detail).catch(() => {});
     return response;
   };
+  // Some combo failures happen before a member request is made (for example,
+  // strict input-band routing can leave no eligible member). There is then no
+  // Response object carrying a deferred detail, but the synthesized response
+  // still reaches the client and must appear in Error log. Keep this record at
+  // combo scope because no upstream account was selected.
+  const persistSyntheticFinalError = ({ status = 400, message, response }) => {
+    const comboModel = comboName || body?.model || "combo";
+    saveRequestDetail({
+      provider: "combo",
+      model: comboModel,
+      timestamp: new Date().toISOString(),
+      latency: { ttft: 0, total: 0 },
+      tokens: { prompt_tokens: 0, completion_tokens: 0 },
+      request: {
+        model: body?.model,
+        stream: body?.stream,
+        messages: body?.messages,
+        input: body?.input,
+        contents: body?.contents,
+      },
+      response: { error: message, status },
+      status: "error",
+    }).catch(() => {});
+    return response;
+  };
   // Combo members may be legacy strings or objects carrying routing metadata.
   // Keep metadata long enough to apply context limits, then route by model name.
   const modelEntries = Array.isArray(models) ? models : [];
@@ -408,6 +433,21 @@ export async function handleComboChat({
       : models.filter((name) => modelLimits.get(name) === selectedLimit);
     log.info("COMBO", `Strict input band (estimated=${estimatedInputTokens}, ${selectedLimit ? `<= ${selectedLimit}` : "> max configured input"}) [${strictModels.join(", ") || "none"}]`);
     models = strictModels;
+  }
+
+  // No eligible member means no upstream call will create a deferred error.
+  // Return a real client error and persist it immediately so Usage Detail does
+  // not silently omit this case.
+  if (models.length === 0) {
+    const message = inputRouting === "band-strict"
+      ? `No combo model supports the request input size (estimated ${estimatedInputTokens} tokens)`
+      : "Combo has no available models";
+    log.warn("COMBO", message, { combo: comboName || body?.model || "combo" });
+    const response = new Response(
+      JSON.stringify({ error: { message } }),
+      { status: 400, headers: { "Content-Type": "application/json" } },
+    );
+    return persistSyntheticFinalError({ status: 400, message, response });
   }
   let rotatedModels = models;
   let activeStickyModel = null;
