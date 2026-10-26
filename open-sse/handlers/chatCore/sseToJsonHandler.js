@@ -12,6 +12,7 @@ import { extractReasoningText } from "../../translator/concerns/reasoning.js";
 // Responses-API providers (e.g. codex) may emit SSE without content-type + use Responses output shape
 const isResponsesProvider = (p) => PROVIDERS[p]?.format === FORMATS.OPENAI_RESPONSES;
 import { saveRequestDetail, appendRequestLog } from "@/lib/usageDb.js";
+import { applyClientTokenUsagePolicy } from "../../utils/reasoningUsagePolicy.js";
 
 function textFromResponsesMessageItem(item) {
   if (!item?.content || !Array.isArray(item.content)) return "";
@@ -186,7 +187,7 @@ export function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
  * Handle case: provider forced streaming but client wants JSON.
  * Supports both Codex/Responses API SSE and standard Chat Completions SSE.
  */
-export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, customToolNames, toolNameMap, trackDone, appendLog, reqTag, log }) {
+export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, customToolNames, toolNameMap, trackDone, appendLog, reqTag, log, clientTokenUsagePolicy }) {
   const contentType = providerResponse.headers.get("content-type") || "";
   const isSSE = contentType.includes("text/event-stream") || (contentType === "" && isResponsesProvider(provider));
   if (!isSSE) return null; // not handled here
@@ -232,7 +233,9 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
 
       // Client is Responses API → return as-is
       if (sourceFormat === FORMATS.OPENAI_RESPONSES) {
-        return { success: true, response: new Response(JSON.stringify(restoreToolNames(jsonResponse, toolNameMap)), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }) };
+        const clientResponse = structuredClone(jsonResponse);
+        applyClientTokenUsagePolicy(clientResponse, clientTokenUsagePolicy);
+        return { success: true, response: new Response(JSON.stringify(restoreToolNames(clientResponse, toolNameMap)), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }) };
       }
 
       // Build client-format response.
@@ -291,6 +294,8 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
       if (sourceFormat === FORMATS.CLAUDE) {
         finalResp = openAICompletionToClaudeMessage(finalResp);
       }
+
+      applyClientTokenUsagePolicy(finalResp, clientTokenUsagePolicy);
 
       return { success: true, response: new Response(JSON.stringify(restoreToolNames(finalResp, toolNameMap)), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }) };
     } catch (err) {
@@ -371,6 +376,8 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
       : sourceFormat === FORMATS.CLAUDE
         ? openAICompletionToClaudeMessage(parsed)
         : parsed;
+
+    applyClientTokenUsagePolicy(finalBody, clientTokenUsagePolicy);
 
     return { success: true, response: new Response(JSON.stringify(restoreToolNames(finalBody, toolNameMap)), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }) };
   } catch (err) {

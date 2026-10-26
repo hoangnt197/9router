@@ -17,6 +17,7 @@ import {
 } from "./systemoneRouter.js";
 import { takeDeferredError } from "../utils/deferredError.js";
 import { saveRequestDetail } from "@/lib/usageDb.js";
+import { markComboModelRequest, preserveComboModelMarker } from "../utils/reasoningUsagePolicy.js";
 
 // Peek a 2xx combo response for real content. Returns null for non-SSE responses (leave
 // them untouched). For SSE, returns { outcome: "content"|"empty", finishReason, response }
@@ -377,7 +378,12 @@ export async function handleComboChat({
   };
   // Combo members may be legacy strings or objects carrying routing metadata.
   // Keep metadata long enough to apply context limits, then route by model name.
-  const modelLimits = new Map((Array.isArray(models) ? models : []).map((entry) => {
+  const modelEntries = Array.isArray(models) ? models : [];
+  const modelEntriesByName = new Map(modelEntries.map((entry) => {
+    const name = typeof entry === "string" ? entry : entry?.model;
+    return [name, entry];
+  }).filter(([name]) => typeof name === "string" && name.length > 0));
+  const modelLimits = new Map(modelEntries.map((entry) => {
     const name = typeof entry === "string" ? entry : entry?.model;
     const rawLimit = typeof entry === "object" ? entry?.maxInputTokens : null;
     const limit = Number(rawLimit);
@@ -511,7 +517,13 @@ export async function handleComboChat({
     log.info("COMBO", `Trying model ${i + 1}/${rotatedModels.length}: ${modelStr}`);
 
     try {
-      const result = await handleSingleModel(body, modelStr);
+      // Preserve the caller's API-key token policy and attach the selected seat
+      // metadata before the single-model handler clones/translates the body.
+      // These markers are non-enumerable and never reach the upstream provider.
+      const rawModel = modelEntriesByName.get(modelStr) || modelStr;
+      const comboBody = preserveComboModelMarker(body, { ...body, model: comboName || body?.model });
+      markComboModelRequest(comboBody, rawModel, comboName || body?.model);
+      const result = await handleSingleModel(comboBody, modelStr);
       
       // Success (2xx). A 2xx is necessary but NOT sufficient: Gemini aborts (e.g.
       // MALFORMED_FUNCTION_CALL) still return 200 and stream empty content, which would

@@ -8,6 +8,7 @@ import { parseSSELine, hasValuableContent, fixInvalidId, formatSSE, ensureStream
 import { restoreToolNames } from "./opencodeFingerprint.js";
 import { getOpenAIResponsesEventName, isOpenAIResponsesTerminalEvent, formatIncompleteOpenAIResponsesStreamFailure } from "./responsesStreamHelpers.js";
 import { dbg, isDebugEnabled } from "./debugLog.js";
+import { applyClientTokenUsagePolicy } from "./reasoningUsagePolicy.js";
 
 import { SSE_DONE, SSE_HEADERS, SSE_HEADERS_NO_BUFFER } from "./sseConstants.js";
 
@@ -58,8 +59,25 @@ export function createSSEStream(options = {}) {
     body = null,
     onStreamComplete = null,
     apiKey = null,
-    credentials = null
+    credentials = null,
+    clientTokenUsagePolicy = null
   } = options;
+
+  const cloneForClient = (value) => {
+    if (!value || typeof value !== "object") return value;
+    try { return structuredClone(value); } catch { return JSON.parse(JSON.stringify(value)); }
+  };
+  const applyClientUsage = (item) => {
+    if (!clientTokenUsagePolicy || !item || typeof item !== "object") return item;
+    if ((!item.usage || typeof item.usage !== "object") && (!item.usageMetadata || typeof item.usageMetadata !== "object")) return item;
+    const cloned = {
+      ...item,
+      ...(item.usage ? { usage: cloneForClient(item.usage) } : {}),
+      ...(item.usageMetadata ? { usageMetadata: cloneForClient(item.usageMetadata) } : {}),
+    };
+    applyClientTokenUsagePolicy(cloned, clientTokenUsagePolicy);
+    return cloned;
+  };
 
   let buffer = "";
   let usage = null;
@@ -252,7 +270,12 @@ export function createSSEStream(options = {}) {
                 }
               }
 
-              if (!hasValuableContent(parsed, FORMATS.OPENAI)) {
+              // Usage-only trailers (OpenAI stream_options.include_usage) have no
+              // choices/delta. Keep them so accounting and client token policy are
+              // applied to the final usage event instead of silently dropping it.
+              const extractedUsage = extractUsage(parsed);
+              if (extractedUsage) usage = mergeUsage(usage, extractedUsage);
+              if (!hasValuableContent(parsed, FORMATS.OPENAI) && !extractedUsage) {
                 continue;
               }
 
@@ -268,10 +291,7 @@ export function createSSEStream(options = {}) {
                 accumulatedThinking += reasoning;
               }
 
-              const extracted = extractUsage(parsed);
-              if (extracted) {
-                usage = mergeUsage(usage, extracted);
-              }
+              if (extractedUsage) parsed = applyClientUsage(parsed);
 
               responsesTerminal = isOpenAIResponsesTerminalEvent(currentOpenAIResponsesEvent, parsed);
 
@@ -279,12 +299,17 @@ export function createSSEStream(options = {}) {
               if (isFinishChunk && !hasValidUsage(parsed.usage)) {
                 const estimated = estimateUsage(body, totalContentLength, FORMATS.OPENAI);
                 parsed.usage = filterUsageForFormat(estimated, FORMATS.OPENAI);
+                parsed = applyClientUsage(parsed);
                 output = `data: ${JSON.stringify(parsed)}\n`;
                 usage = estimated;
                 injectedUsage = true;
               } else if (isFinishChunk && usage) {
                 const buffered = addBufferToUsage(usage);
                 parsed.usage = filterUsageForFormat(buffered, FORMATS.OPENAI);
+                parsed = applyClientUsage(parsed);
+                output = `data: ${JSON.stringify(parsed)}\n`;
+                injectedUsage = true;
+              } else if (extractedUsage) {
                 output = `data: ${JSON.stringify(parsed)}\n`;
                 injectedUsage = true;
               } else if (idFixed || fieldsInjected || toolCallIdFixed || toolNameRestored) {
@@ -404,7 +429,7 @@ export function createSSEStream(options = {}) {
 
         // Responses same-format passthrough: re-emit with original event framing
         if (keepsOpenAIResponsesFormat && openAIResponsesEventName) {
-          const output = formatSSE({ event: openAIResponsesEventName, data: parsed }, sourceFormat);
+          const output = formatSSE({ event: openAIResponsesEventName, data: applyClientUsage(parsed) }, sourceFormat);
           reqLogger?.appendConvertedChunk?.(output);
           controller.enqueue(sharedEncoder.encode(output));
           currentOpenAIResponsesEvent = null;
@@ -428,7 +453,7 @@ export function createSSEStream(options = {}) {
         }
 
         if (translated?.length > 0) {
-          for (const item of translated) {
+          for (let item of translated) {
             if (item === null || item === undefined) continue;
             // Filter empty chunks
             if (!hasValuableContent(item, sourceFormat)) {
@@ -446,6 +471,8 @@ export function createSSEStream(options = {}) {
               const buffered = addBufferToUsage(state.usage);
               item.usage = filterUsageForFormat(buffered, sourceFormat);
             }
+
+            item = applyClientUsage(item);
 
             const output = formatSSE(item, sourceFormat);
             reqLogger?.appendConvertedChunk?.(output);
@@ -582,7 +609,7 @@ export function createSSEStream(options = {}) {
   });
 }
 
-export function createSSETransformStreamWithLogger(targetFormat, sourceFormat, provider = null, reqLogger = null, toolNameMap = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null, customToolNames = null, credentials = null) {
+export function createSSETransformStreamWithLogger(targetFormat, sourceFormat, provider = null, reqLogger = null, toolNameMap = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null, customToolNames = null, credentials = null, clientTokenUsagePolicy = null) {
   return createSSEStream({
     mode: STREAM_MODE.TRANSLATE,
     targetFormat,
@@ -596,11 +623,12 @@ export function createSSETransformStreamWithLogger(targetFormat, sourceFormat, p
     body,
     onStreamComplete,
     apiKey,
-    credentials
+    credentials,
+    clientTokenUsagePolicy
   });
 }
 
-export function createPassthroughStreamWithLogger(provider = null, reqLogger = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null, toolNameMap = null) {
+export function createPassthroughStreamWithLogger(provider = null, reqLogger = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null, toolNameMap = null, clientTokenUsagePolicy = null) {
   return createSSEStream({
     mode: STREAM_MODE.PASSTHROUGH,
     provider,
@@ -610,6 +638,7 @@ export function createPassthroughStreamWithLogger(provider = null, reqLogger = n
     connectionId,
     body,
     onStreamComplete,
-    apiKey
+    apiKey,
+    clientTokenUsagePolicy
   });
 }

@@ -28,7 +28,7 @@ import { getProjectIdForConnection } from "open-sse/services/projectId.js";
 import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
 import { getKeyAccessContext, enforceKeyAccess, filterAdapterModels } from "../services/keyAccess.js";
 import { resolveSmartChoice } from "../services/systemoneRouter.js";
-import { markClientTokenUsagePolicy } from "open-sse/utils/reasoningUsagePolicy.js";
+import { createClientTokenUsagePolicy, markClientTokenUsagePolicy } from "open-sse/utils/reasoningUsagePolicy.js";
 
 /**
  * Handle chat completion request
@@ -77,11 +77,13 @@ export async function handleChat(request, clientRawRequest = null) {
   // API-key token rules are a client-facing usage policy. Attach them to the
   // request before translators/executors clone the body so the final response
   // can apply multiplier and cache-read ratio consistently.
+  let clientTokenUsagePolicy = null;
   if (apiKey) {
     try {
       const tokenRules = await getApiKeyTokenRules(apiKey);
       if (tokenRules?.input?.length || tokenRules?.output?.length) {
         markClientTokenUsagePolicy(body, tokenRules);
+        clientTokenUsagePolicy = createClientTokenUsagePolicy(body);
       }
     } catch (error) {
       log.warn("AUTH", `Unable to load API key token rules: ${error?.message || error}`);
@@ -142,7 +144,7 @@ export async function handleChat(request, clientRawRequest = null) {
             const { tools, tool_choice, ...cleanBody } = clientRawRequest.body || {};
             cleanRawReq = { ...clientRawRequest, body: cleanBody };
           }
-          return handleSingleModelChat(b, m, cleanRawReq, request, apiKey, null, true);
+          return handleSingleModelChat(b, m, cleanRawReq, request, apiKey, null, true, clientTokenUsagePolicy);
         },
         log,
         comboName: modelStr,
@@ -158,7 +160,7 @@ export async function handleChat(request, clientRawRequest = null) {
       body,
       models: augmentedModels,
       handleSingleModel: withCapacityAdapterStripping(
-        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, null, true),
+        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, null, true, clientTokenUsagePolicy),
         adapterAdded
       ),
       log,
@@ -191,7 +193,7 @@ export async function handleChat(request, clientRawRequest = null) {
       body,
       models: soloAugmented,
       handleSingleModel: withCapacityAdapterStripping(
-        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, null, true),
+        (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, null, true, clientTokenUsagePolicy),
         adapterAdded
       ),
       log,
@@ -200,13 +202,13 @@ export async function handleChat(request, clientRawRequest = null) {
     });
   }
 
-  return handleSingleModelChat(body, modelStr, clientRawRequest, request, apiKey, contextMarker ? `${modelStr.slice(modelStr.indexOf("/") + 1)}[${contextMarker}]` : null);
+  return handleSingleModelChat(body, modelStr, clientRawRequest, request, apiKey, contextMarker ? `${modelStr.slice(modelStr.indexOf("/") + 1)}[${contextMarker}]` : null, false, clientTokenUsagePolicy);
 }
 
 /**
  * Handle single model chat request
  */
-async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKey = null, requestedModel = null, deferErrorPersistence = false) {
+async function handleSingleModelChat(body, modelStr, clientRawRequest = null, request = null, apiKey = null, requestedModel = null, deferErrorPersistence = false, clientTokenUsagePolicy = null) {
   const modelInfo = await getModelInfo(modelStr);
 
   // If provider is null, this might be a combo name - check and handle
@@ -236,7 +238,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
               const { tools, tool_choice, ...cleanBody } = clientRawRequest.body || {};
               cleanRawReq = { ...clientRawRequest, body: cleanBody };
             }
-            return handleSingleModelChat(b, m, cleanRawReq, request, apiKey, null, true);
+            return handleSingleModelChat(b, m, cleanRawReq, request, apiKey, null, true, clientTokenUsagePolicy);
           },
           log,
           comboName: modelStr,
@@ -254,7 +256,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         body,
         models: augmentedModels,
         handleSingleModel: withCapacityAdapterStripping(
-          (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, null, true),
+          (b, m) => handleSingleModelChat(b, m, clientRawRequest, request, apiKey, null, true, clientTokenUsagePolicy),
           adapterAdded
         ),
         log,
@@ -337,6 +339,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       connectionId: credentials.connectionId,
       userAgent,
       apiKey,
+      clientTokenUsagePolicy,
       ccFilterNaming: !!chatSettings.ccFilterNaming,
       rtkEnabled: !!chatSettings.rtkEnabled,
       headroomEnabled: !!chatSettings.headroomEnabled,
