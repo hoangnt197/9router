@@ -1077,7 +1077,7 @@ function CapacityAdapterCap({ cap, entry, onChange, activeProviders, getCaps }) 
           onDeselect={handleDeselect}
           activeProviders={activeProviders}
           title={`Add ${cap.label} Model`}
-          addedModelValues={models}
+              addedModelValues={models.map(comboModelId)}
           capFilter={cap.key}
           closeOnSelect={false}
         />
@@ -1095,17 +1095,18 @@ function ModelItem({ id, index, model, isFirst, isLast, onEdit, onMoveUp, onMove
     zIndex: isDragging ? 999 : undefined,
   };
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(model);
+  const modelId = comboModelId(model);
+  const [draft, setDraft] = useState(modelId);
   const commit = () => {
     const trimmed = draft.trim();
-    if (trimmed && trimmed !== model) onEdit(trimmed);
-    else setDraft(model);
+    if (trimmed && trimmed !== modelId) onEdit(trimmed);
+    else setDraft(modelId);
     setEditing(false);
   };
 
   const handleKeyDown = (e) => {
     if (e.key === "Enter") commit();
-    if (e.key === "Escape") { setDraft(model); setEditing(false); }
+    if (e.key === "Escape") { setDraft(modelId); setEditing(false); }
   };
 
   return (
@@ -1148,7 +1149,7 @@ function ModelItem({ id, index, model, isFirst, isLast, onEdit, onMoveUp, onMove
           onClick={() => setEditing(true)}
           title="Click to edit"
         >
-          {model}
+          {modelId}
         </div>
       )}
 
@@ -1248,13 +1249,13 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
   };
 
   const handleAddModel = (model) => {
-    if (!models.includes(model.value)) {
+    if (!models.some((entry) => comboModelId(entry) === model.value)) {
       setModels([...models, model.value]);
     }
   };
 
   const handleDeselectModel = (model) => {
-    setModels(models.filter((m) => m !== model.value));
+    setModels(models.filter((m) => comboModelId(m) !== model.value));
   };
 
   const handleRemoveModel = (index) => {
@@ -1329,7 +1330,10 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders, kindF
                       isLast={index === modelItems.length - 1}
                       onEdit={(newVal) => {
                         const updated = [...models];
-                        updated[index] = newVal;
+                        const current = updated[index];
+                        updated[index] = typeof current === "string"
+                          ? newVal
+                          : { ...current, model: newVal };
                         setModels(updated);
                       }}
                       onMoveUp={() => handleMoveUp(index)}
