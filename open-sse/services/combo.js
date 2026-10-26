@@ -366,6 +366,7 @@ export async function handleComboChat({
   sessionSticky = true,
   confidenceThreshold = 0.8,
   resolveSmartChoice = null,
+  inputRouting = "soft",
 }) {
   // Combo members may be legacy strings or objects carrying routing metadata.
   // Keep metadata long enough to apply context limits, then route by model name.
@@ -385,6 +386,15 @@ export async function handleComboChat({
   if (undersized.length > 0 && compatible.length > 0) {
     log.info("COMBO", `Input ${estimatedInputTokens} tokens exceeds maxInputTokens for: ${undersized.join(", ")}`);
     models = [...compatible, ...undersized];
+  }
+  if (inputRouting === "band-strict" && models.length > 0) {
+    const finiteLimits = [...new Set([...modelLimits.values()].filter((limit) => limit))].sort((a, b) => a - b);
+    const selectedLimit = finiteLimits.find((limit) => estimatedInputTokens <= limit);
+    const strictModels = selectedLimit === undefined
+      ? models.filter((name) => !modelLimits.get(name))
+      : models.filter((name) => modelLimits.get(name) === selectedLimit);
+    log.info("COMBO", `Strict input band (estimated=${estimatedInputTokens}, ${selectedLimit ? `<= ${selectedLimit}` : "> max configured input"}) [${strictModels.join(", ") || "none"}]`);
+    models = strictModels;
   }
   let rotatedModels = models;
   let activeStickyModel = null;

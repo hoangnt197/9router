@@ -154,6 +154,7 @@ export async function handleChat(request, clientRawRequest = null) {
       smartPolicy: comboCfg.smartPolicy || "smart",
       sessionSticky: comboCfg.sessionSticky !== false,
       confidenceThreshold: typeof comboCfg.confidenceThreshold === "number" ? comboCfg.confidenceThreshold : 0.8,
+      inputRouting: comboCfg.inputRouting || "soft",
       resolveSmartChoice: comboStrategy === "smart"
         ? (b, m) => resolveSmartChoice({
             body: b,
@@ -249,6 +250,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         smartPolicy: comboCfg.smartPolicy || "smart",
         sessionSticky: comboCfg.sessionSticky !== false,
         confidenceThreshold: typeof comboCfg.confidenceThreshold === "number" ? comboCfg.confidenceThreshold : 0.8,
+        inputRouting: comboCfg.inputRouting || "soft",
         resolveSmartChoice: comboStrategy === "smart"
           ? (b, m) => resolveSmartChoice({
               body: b,
