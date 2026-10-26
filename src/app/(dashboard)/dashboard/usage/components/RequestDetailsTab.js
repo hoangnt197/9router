@@ -111,6 +111,7 @@ export default function RequestDetailsTab() {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [providers, setProviders] = useState([]);
   const [providerNameCache, setProviderNameCache] = useState(null);
+  const [accountCache, setAccountCache] = useState({});
   const [filters, setFilters] = useState({
     provider: "",
     startDate: "",
@@ -119,9 +120,21 @@ export default function RequestDetailsTab() {
 
   const fetchProviders = useCallback(async () => {
     try {
-      const res = await fetch("/api/usage/providers");
+      const [res, connectionsRes] = await Promise.all([
+        fetch("/api/usage/providers"),
+        fetch("/api/providers", { cache: "no-store" }),
+      ]);
       const data = await res.json();
       setProviders(data.providers || []);
+      if (connectionsRes.ok) {
+        const connectionData = await connectionsRes.json();
+        const accounts = {};
+        for (const connection of connectionData.connections || []) {
+          const account = connection.email || connection.displayName || connection.name;
+          if (connection.id && account) accounts[connection.id] = account;
+        }
+        setAccountCache(accounts);
+      }
 
       const cache = await fetchProviderNames();
       setProviderNameCache(cache.providerNameCache);
@@ -196,7 +209,7 @@ export default function RequestDetailsTab() {
       <div className="flex items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold text-text-main">Error log</h2>
-          <p className="text-xs text-text-muted">Inspect failed requests and the connection that produced each error.</p>
+          <p className="text-xs text-text-muted">Inspect failed requests and the account that produced each error.</p>
         </div>
         <Button variant="outline" size="sm" icon="delete" onClick={handleClearLogs}>
           Clear logs
@@ -276,7 +289,7 @@ export default function RequestDetailsTab() {
                 <th className="text-left p-4 text-sm font-semibold text-text-main">Timestamp</th>
                 <th className="text-left p-4 text-sm font-semibold text-text-main">Model</th>
                 <th className="text-left p-4 text-sm font-semibold text-text-main">Provider</th>
-                <th className="text-left p-4 text-sm font-semibold text-text-main">Connection</th>
+                <th className="text-left p-4 text-sm font-semibold text-text-main">Account</th>
                 <th className="text-left p-4 text-sm font-semibold text-text-main">Error</th>
                 <th className="text-center p-4 text-sm font-semibold text-text-main">Action</th>
               </tr>
@@ -314,8 +327,8 @@ export default function RequestDetailsTab() {
                          {getProviderName(detail.provider, providerNameCache)}
                        </span>
                      </td>
-                    <td className="max-w-[180px] truncate p-4 font-mono text-sm text-text-main" title={detail.connectionId || "Unknown connection"}>
-                      {detail.connectionId ? `${detail.connectionId.slice(0, 8)}...` : "—"}
+                    <td className="max-w-[220px] truncate p-4 text-sm text-text-main" title={accountCache[detail.connectionId] || detail.connectionId || "Unknown account"}>
+                      {accountCache[detail.connectionId] || (detail.connectionId ? `${detail.connectionId.slice(0, 8)}...` : "—")}
                     </td>
                     <td className="max-w-[360px] truncate p-4 text-sm text-red-600" title={detail.response?.error || "Unknown error"}>
                       {detail.response?.status ? `${detail.response.status} · ` : ""}{detail.response?.error || "Unknown error"}
@@ -385,7 +398,7 @@ export default function RequestDetailsTab() {
               </div>
               <div>
                 <span className="text-text-muted">Connection:</span>{" "}
-                <span className="font-mono text-text-main">{selectedDetail.connectionId || "—"}</span>
+                <span className="text-text-main">{accountCache[selectedDetail.connectionId] || selectedDetail.connectionId || "—"}</span>
               </div>
               {selectedDetail.headers?.["x-9r-key-suffix"] && (
                 <div>
