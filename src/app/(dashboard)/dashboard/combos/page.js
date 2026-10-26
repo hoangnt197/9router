@@ -711,17 +711,12 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
                 combo.models.slice(0, 3).map((model, index) => {
                   const modelId = comboModelId(model);
                   const seat = typeof model === "object" && model !== null ? model : null;
-                  const hasPrice = seat?.price !== null && seat?.price !== undefined && seat?.price !== "" && Number(seat.price) >= 0;
-                  const priceLabel = hasPrice
-                    ? (seat.pricingType === "token" ? `$${seat.price}/1M${Number(seat.minPrice) > 0 ? ` (min $${seat.minPrice})` : ""}` : `$${seat.price}/req`)
-                    : null;
                   const maxInput = Number(seat?.maxInputTokens) > 0 ? Number(seat.maxInputTokens) : null;
                   const headroom = Number(seat?.headroomMinInputTokens) > 0 ? Number(seat.headroomMinInputTokens) : null;
                   const schedule = seat?.timeSchedule?.enabled ? `${seat.timeSchedule.startTime || "00:00"}-${seat.timeSchedule.endTime || "23:59"}` : null;
                   return (
                   <code key={index} className="inline-flex items-center gap-1 rounded bg-black/5 px-1.5 py-0.5 font-mono text-xs text-text-muted dark:bg-white/5">
                     <span>{modelId}</span>
-                    {priceLabel && <span className="rounded bg-emerald-500/10 px-1 py-0.2 text-[10px] text-emerald-600 dark:text-emerald-400">{priceLabel}</span>}
                     {maxInput && <span className="rounded bg-sky-500/10 px-1 py-0.2 text-[10px] text-sky-600 dark:text-sky-400" title="Maximum estimated input tokens">≤ {maxInput.toLocaleString()} in</span>}
                     {headroom && <span className="rounded bg-cyan-500/10 px-1 py-0.2 text-[10px] text-cyan-600 dark:text-cyan-400" title="Compress above estimated input tokens">&gt; {headroom.toLocaleString()} in</span>}
                     {schedule && <span className="rounded bg-purple-500/10 px-1 py-0.2 text-[10px] text-purple-600 dark:text-purple-400" title="Active hours">⏰ {schedule}</span>}
@@ -1189,15 +1184,6 @@ function ModelItem({ id, index, model, isFirst, isLast, onEdit, onConfigChange, 
 
       {typeof model === "object" && model !== null && (
         <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
-          <select
-            value={model.pricingType === "token" ? "token" : "request"}
-            onChange={(e) => onConfigChange({ pricingType: e.target.value })}
-            className="h-6 rounded border border-border/60 bg-transparent px-1 text-[10px] text-text-muted"
-            title="Pricing type"
-          >
-            <option value="request">request</option>
-            <option value="token">token</option>
-          </select>
           <input
             type="number"
             min="1"
@@ -1207,8 +1193,6 @@ function ModelItem({ id, index, model, isFirst, isLast, onEdit, onConfigChange, 
             placeholder="max input"
             title="Maximum input tokens"
           />
-          <input type="number" min="0" step="0.000001" value={model.price ?? ""} onChange={(e) => onConfigChange({ price: e.target.value === "" ? null : e.target.value })} className="h-6 w-16 rounded border border-border/60 bg-transparent px-1 text-[10px] text-text-muted" placeholder="price" title="Price" />
-          <input type="number" min="0" step="0.000001" value={model.minPrice ?? ""} onChange={(e) => onConfigChange({ minPrice: e.target.value === "" ? null : e.target.value })} className="h-6 w-16 rounded border border-border/60 bg-transparent px-1 text-[10px] text-text-muted" placeholder="min" title="Minimum price" />
           <input type="number" min="1" value={model.headroomMinInputTokens ?? ""} onChange={(e) => onConfigChange({ headroomMinInputTokens: e.target.value === "" ? null : Math.max(1, Math.floor(Number(e.target.value))) })} className="h-6 w-20 rounded border border-border/60 bg-transparent px-1 text-[10px] text-text-muted" placeholder="headroom" title="Compress history above this input size" />
           <label className="flex items-center gap-1 text-[10px] text-text-muted" title="Active time schedule">
             <input type="checkbox" checked={!!model.timeSchedule?.enabled} onChange={(e) => onConfigChange({ timeSchedule: { ...(model.timeSchedule || {}), enabled: e.target.checked } })} />
