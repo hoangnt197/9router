@@ -1124,6 +1124,7 @@ function ModelItem({ id, index, model, isFirst, isLast, onEdit, onConfigChange, 
     zIndex: isDragging ? 999 : undefined,
   };
   const [editing, setEditing] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const modelId = comboModelId(model);
   const [draft, setDraft] = useState(modelId);
   const commit = () => {
@@ -1138,12 +1139,20 @@ function ModelItem({ id, index, model, isFirst, isLast, onEdit, onConfigChange, 
     if (e.key === "Escape") { setDraft(modelId); setEditing(false); }
   };
 
+  const maxInputTokens = typeof model === "object" && model?.maxInputTokens != null ? model.maxInputTokens : "";
+  const headroomMinInputTokens = typeof model === "object" && model?.headroomMinInputTokens != null ? model.headroomMinInputTokens : "";
+  const timeSchedule = typeof model === "object" && model?.timeSchedule
+    ? model.timeSchedule
+    : { enabled: false, startTime: "00:00", endTime: "23:59" };
+  const hasConfig = Number(maxInputTokens) > 0 || Number(headroomMinInputTokens) > 0 || !!timeSchedule.enabled;
+
   return (
     <div
       ref={setNodeRef}
       style={style}
-      className={`group flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 bg-black/[0.02] hover:bg-black/[0.04] dark:bg-white/[0.02] dark:hover:bg-white/[0.04] transition-colors ${isDragging ? "shadow-md ring-1 ring-primary/30" : ""}`}
+      className={`flex min-w-0 flex-col rounded-lg border border-black/5 bg-black/[0.02] p-2 transition-all hover:border-black/10 dark:border-white/5 dark:bg-white/[0.02] dark:hover:border-white/10 ${isDragging ? "shadow-md ring-1 ring-primary/30" : ""}`}
     >
+      <div className="flex min-w-0 items-center gap-1.5">
       {/* Drag handle */}
       <button
         {...attributes}
@@ -1182,28 +1191,16 @@ function ModelItem({ id, index, model, isFirst, isLast, onEdit, onConfigChange, 
         </div>
       )}
 
-      {typeof model === "object" && model !== null && (
-        <div className="flex min-w-0 flex-wrap items-center justify-end gap-1">
-          <input
-            type="number"
-            min="1"
-            value={model.maxInputTokens ?? ""}
-            onChange={(e) => onConfigChange({ maxInputTokens: e.target.value === "" ? null : Math.max(1, Math.floor(Number(e.target.value))) })}
-            className="h-6 w-20 rounded border border-border/60 bg-transparent px-1 text-[10px] text-text-muted"
-            placeholder="max input"
-            title="Maximum input tokens"
-          />
-          <input type="number" min="1" value={model.headroomMinInputTokens ?? ""} onChange={(e) => onConfigChange({ headroomMinInputTokens: e.target.value === "" ? null : Math.max(1, Math.floor(Number(e.target.value))) })} className="h-6 w-20 rounded border border-border/60 bg-transparent px-1 text-[10px] text-text-muted" placeholder="headroom" title="Compress history above this input size" />
-          <label className="flex items-center gap-1 text-[10px] text-text-muted" title="Active time schedule">
-            <input type="checkbox" checked={!!model.timeSchedule?.enabled} onChange={(e) => onConfigChange({ timeSchedule: { ...(model.timeSchedule || {}), enabled: e.target.checked } })} />
-            hours
-          </label>
-          {model.timeSchedule?.enabled && <>
-            <input type="time" value={model.timeSchedule.startTime || "00:00"} onChange={(e) => onConfigChange({ timeSchedule: { ...(model.timeSchedule || {}), startTime: e.target.value } })} className="h-6 rounded border border-border/60 bg-transparent px-1 text-[10px] text-text-muted" />
-            <input type="time" value={model.timeSchedule.endTime || "23:59"} onChange={(e) => onConfigChange({ timeSchedule: { ...(model.timeSchedule || {}), endTime: e.target.value } })} className="h-6 rounded border border-border/60 bg-transparent px-1 text-[10px] text-text-muted" />
-          </>}
-        </div>
-      )}
+      <button
+        type="button"
+        onClick={() => setExpanded((value) => !value)}
+        className={`flex shrink-0 items-center gap-1 rounded px-2 py-1 text-[11px] font-medium transition-colors ${expanded ? "bg-primary text-white" : hasConfig ? "bg-primary/10 text-primary" : "bg-black/5 text-text-muted hover:bg-black/10 dark:bg-white/5 dark:hover:bg-white/10"}`}
+        title="Configure model routing"
+      >
+        <span className="material-symbols-outlined text-[14px]">tune</span>
+        <span>Config</span>
+        <span className="material-symbols-outlined text-[12px]">{expanded ? "expand_less" : "expand_more"}</span>
+      </button>
 
       {/* Priority arrows */}
       <div className="flex shrink-0 items-center gap-0.5">
@@ -1233,6 +1230,34 @@ function ModelItem({ id, index, model, isFirst, isLast, onEdit, onConfigChange, 
       >
         <span className="material-symbols-outlined text-[12px]">close</span>
       </button>
+      </div>
+
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5 pl-8">
+        {Number(maxInputTokens) > 0 && <span className="rounded bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-mono text-sky-600 dark:text-sky-400">≤ {Number(maxInputTokens).toLocaleString()} input</span>}
+        {Number(headroomMinInputTokens) > 0 && <span className="rounded bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-mono text-cyan-600 dark:text-cyan-400">&gt; {Number(headroomMinInputTokens).toLocaleString()} in</span>}
+        {!!timeSchedule.enabled && <span className="rounded bg-purple-500/10 px-1.5 py-0.5 text-[10px] font-mono text-purple-600 dark:text-purple-400">⏰ {timeSchedule.startTime || "00:00"} - {timeSchedule.endTime || "23:59"}</span>}
+      </div>
+
+      {expanded && (
+        <div className="mt-2.5 grid grid-cols-1 gap-2 rounded-md border border-black/5 bg-white/70 p-2.5 dark:border-white/5 dark:bg-black/40 sm:grid-cols-2">
+          <div>
+            <label className="mb-0.5 block text-[10px] font-medium text-text-muted">Max Input Tokens</label>
+            <input type="number" min="1" step="1" value={maxInputTokens} onChange={(e) => onConfigChange({ maxInputTokens: e.target.value === "" ? null : Math.max(1, Math.floor(Number(e.target.value))) })} placeholder="No limit" className="h-7 w-full rounded border border-black/10 bg-white px-2 font-mono text-xs outline-none focus:border-primary dark:border-white/10 dark:bg-black/20" />
+          </div>
+          <div>
+            <label className="mb-0.5 block text-[10px] font-medium text-text-muted">Compress &gt; input</label>
+            <input type="number" min="1" step="1" value={headroomMinInputTokens} onChange={(e) => onConfigChange({ headroomMinInputTokens: e.target.value === "" ? null : Math.max(1, Math.floor(Number(e.target.value))) })} placeholder="Off" className="h-7 w-full rounded border border-black/10 bg-white px-2 font-mono text-xs outline-none focus:border-primary dark:border-white/10 dark:bg-black/20" />
+          </div>
+          <div className="sm:col-span-2 flex items-center justify-between rounded border border-black/5 px-2 py-1.5 dark:border-white/5">
+            <div><div className="text-[11px] font-medium text-text-main">Active hours (Vietnam UTC+7)</div><div className="text-[9px] text-text-muted">Skip this item outside the configured time range.</div></div>
+            <label className="flex items-center gap-1.5 text-[10px] text-text-muted"><input type="checkbox" checked={!!timeSchedule.enabled} onChange={(e) => onConfigChange({ timeSchedule: { ...timeSchedule, enabled: e.target.checked } })} /> Enable</label>
+          </div>
+          {timeSchedule.enabled && <>
+            <div><label className="mb-0.5 block text-[10px] font-medium text-text-muted">Start time</label><input type="time" value={timeSchedule.startTime || "00:00"} onChange={(e) => onConfigChange({ timeSchedule: { ...timeSchedule, startTime: e.target.value } })} className="h-7 w-full rounded border border-black/10 bg-white px-2 text-xs outline-none focus:border-primary dark:border-white/10 dark:bg-black/20" /></div>
+            <div><label className="mb-0.5 block text-[10px] font-medium text-text-muted">End time</label><input type="time" value={timeSchedule.endTime || "23:59"} onChange={(e) => onConfigChange({ timeSchedule: { ...timeSchedule, endTime: e.target.value } })} className="h-7 w-full rounded border border-black/10 bg-white px-2 text-xs outline-none focus:border-primary dark:border-white/10 dark:bg-black/20" /></div>
+          </>}
+        </div>
+      )}
     </div>
   );
 }
