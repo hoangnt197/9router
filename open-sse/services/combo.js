@@ -15,6 +15,8 @@ import {
   clearStickyComboSession,
   orderModelsByChoice,
 } from "./systemoneRouter.js";
+import { takeDeferredError } from "../utils/deferredError.js";
+import { saveRequestDetail } from "@/lib/usageDb.js";
 
 // Peek a 2xx combo response for real content. Returns null for non-SSE responses (leave
 // them untouched). For SSE, returns { outcome: "content"|"empty", finishReason, response }
@@ -368,6 +370,11 @@ export async function handleComboChat({
   resolveSmartChoice = null,
   inputRouting = "soft",
 }) {
+  const persistFinalError = (response) => {
+    const detail = takeDeferredError(response);
+    if (detail) saveRequestDetail(detail).catch(() => {});
+    return response;
+  };
   // Combo members may be legacy strings or objects carrying routing metadata.
   // Keep metadata long enough to apply context limits, then route by model name.
   const modelLimits = new Map((Array.isArray(models) ? models : []).map((entry) => {
@@ -497,6 +504,7 @@ export async function handleComboChat({
   let earliestRetryAfter = null;
   let lastStatus = null;
   let requestScopedResult = null;
+  let lastFailedResponse = null;
 
   for (let i = 0; i < rotatedModels.length; i++) {
     const modelStr = rotatedModels[i];
@@ -608,10 +616,11 @@ export async function handleComboChat({
       // Check if should fallback to next model
       const { provider } = parseModel(modelStr);
       const { shouldFallback, cooldownMs, requestScoped } = checkFallbackError(result.status, errorText, 0, provider);
+      lastFailedResponse = result;
 
       if (!shouldFallback && !requestScoped) {
         log.warn("COMBO", `Model ${modelStr} failed (no fallback)`, { status: result.status });
-        return result;
+        return persistFinalError(result);
       }
 
       // A request-scoped 4xx (validation failure, unsupported parameter, context
@@ -660,7 +669,7 @@ export async function handleComboChat({
   // This is also what the caller saw before combos advanced on these errors.
   if (requestScopedResult) {
     log.warn("COMBO", `No model served the request; returning the first request-scoped failure (${requestScopedResult.status})`);
-    return requestScopedResult;
+    return persistFinalError(requestScopedResult);
   }
 
   // All models failed
@@ -670,6 +679,10 @@ export async function handleComboChat({
   const allDisabled = lastError && lastError.toLowerCase().includes("no credentials");
   const status = allDisabled ? 503 : (lastStatus || 503);
   const msg = lastError || "All combo models unavailable";
+  if (lastFailedResponse) {
+    const detail = takeDeferredError(lastFailedResponse);
+    if (detail) saveRequestDetail(detail).catch(() => {});
+  }
 
   if (earliestRetryAfter) {
     const retryHuman = formatRetryAfter(earliestRetryAfter);
