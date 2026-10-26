@@ -11,6 +11,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { handleImageGenerationCore } from "../../open-sse/handlers/imageGenerationCore.js";
+import { CODEX_CLI_VERSION } from "../../open-sse/config/appConstants.js";
 
 const originalFetch = global.fetch;
 
@@ -316,7 +317,7 @@ describe("handleImageGenerationCore", () => {
     expect(responseBody.data[0].b64_json).toBeTruthy();
   });
 
-  it.each(["gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])("generates image with Codex %s-image using current Codex version header", async (model) => {
+  it.each(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])("generates image with Codex %s-image using current Codex version header", async (model) => {
     global.fetch.mockResolvedValueOnce(
       new Response(
         [
@@ -343,13 +344,6 @@ describe("handleImageGenerationCore", () => {
       credentials: {
         accessToken: "codex-token",
         providerSpecificData: { chatgptAccountId: "account-123" },
-        rawHeaders: {
-          authorization: "Bearer router-key",
-          "user-agent": "Codex Desktop/0.153.4 custom-terminal",
-          originator: "captured-image-originator",
-          "x-codex-turn-metadata": "{\"turn_id\":\"image-turn\"}",
-          "x-custom-image": "custom-value",
-        },
       },
       log: null,
       onUsage,
@@ -363,14 +357,7 @@ describe("handleImageGenerationCore", () => {
         headers: expect.objectContaining({
           authorization: "Bearer codex-token",
           "chatgpt-account-id": "account-123",
-          originator: "captured-image-originator",
-          "user-agent": "Codex Desktop/0.153.4 custom-terminal",
-          "session-id": expect.any(String),
-          "thread-id": expect.any(String),
-          "x-client-request-id": expect.any(String),
-          "x-codex-beta-features": "remote_compaction_v2",
-          "x-codex-turn-metadata": "{\"turn_id\":\"image-turn\"}",
-          "x-custom-image": "custom-value",
+          version: CODEX_CLI_VERSION,
         }),
       })
     );
@@ -390,6 +377,47 @@ describe("handleImageGenerationCore", () => {
       total_tokens: 579,
       cached_tokens: 12,
     });
+  });
+
+  it("generates image with Codex gpt-image-2.5 tool model", async () => {
+    global.fetch.mockResolvedValueOnce(
+      new Response(
+        [
+          "event: response.output_item.done",
+          'data: {"item":{"type":"image_generation_call","result":"base64codeximage"}}',
+          "",
+          "",
+        ].join("\n"),
+        { status: 200, headers: { "Content-Type": "text/event-stream" } }
+      )
+    );
+
+    const result = await handleImageGenerationCore({
+      body: {
+        prompt: "A futuristic city",
+        size: "1024x1024",
+        output_format: "png",
+      },
+      modelInfo: { provider: "codex", model: "gpt-image-2.5" },
+      credentials: {
+        accessToken: "codex-token",
+        providerSpecificData: { chatgptAccountId: "account-123" },
+      },
+      log: null,
+    });
+
+    expect(result.success).toBe(true);
+    const fetchCall = global.fetch.mock.calls[0];
+    const requestBody = JSON.parse(fetchCall[1].body);
+    expect(requestBody.model).toBe("gpt-5.6-terra");
+    expect(requestBody.tools).toEqual([
+      { type: "image_generation", output_format: "png", size: "1024x1024", action: "generate", model: "gpt-image-2.5" },
+    ]);
+    expect(requestBody.tool_choice).toEqual({ type: "image_generation" });
+    expect(requestBody.reasoning).toEqual({ effort: "medium", summary: "auto" });
+
+    const responseBody = await result.response.json();
+    expect(responseBody.data[0].b64_json).toBe("base64codeximage");
   });
 
   it("generates image with Cloudflare Workers AI JSON response", async () => {

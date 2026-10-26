@@ -1,13 +1,13 @@
 import { convertResponsesStreamToJson } from "../../transformer/streamToJsonConverter.js";
+import { restoreToolNames } from "../../utils/opencodeFingerprint.js";
 import { createErrorResult } from "../../utils/error.js";
 import { HTTP_STATUS } from "../../config/runtimeConfig.js";
 import { FORMATS } from "../../translator/formats.js";
+import { openAICompletionToClaudeMessage } from "../../translator/concerns/claudeMessage.js";
 import { PROVIDERS } from "../../config/providers.js";
 import { buildRequestDetail, extractRequestConfig, saveUsageStats, formatDoneLine } from "./requestDetail.js";
 import { ROLE, RESPONSES_ITEM } from "../../translator/schema/index.js";
-import { stripThinkingSuffix } from "../../translator/concerns/thinkingUnified.js";
-import { applyClientTokenUsagePolicy, applyResponsePolicy, createClientTokenUsagePolicy, createReasoningUsagePolicy, getComboName, publicModelName } from "../../utils/reasoningUsagePolicy.js";
-import { estimateUsageWithoutBuffer } from "../../utils/usageTracking.js";
+import { extractReasoningText } from "../../translator/concerns/reasoning.js";
 
 // Responses-API providers (e.g. codex) may emit SSE without content-type + use Responses output shape
 const isResponsesProvider = (p) => PROVIDERS[p]?.format === FORMATS.OPENAI_RESPONSES;
@@ -20,47 +20,6 @@ function textFromResponsesMessageItem(item) {
   const anyText = item.content.find((c) => typeof c.text === "string");
   if (typeof anyText?.text === "string") return anyText.text;
   return "";
-}
-
-function outputLengthFromResponses(output) {
-  return (output || []).reduce((total, item) => total + (item?.content || []).reduce((n, part) => n + (typeof part?.text === "string" ? part.text.length : 0), 0), 0);
-}
-
-function isTerminalSSEBlock(block) {
-  const event = block.match(/^event:\s*([^\r\n]+)/m)?.[1]?.trim();
-  if (["response.completed", "response.done", "response.failed", "response.incomplete"].includes(event)) return true;
-  const data = block.match(/^data:\s*(.+)$/m)?.[1]?.trim() || block.trim();
-  if (!data || data === "[DONE]") return data === "[DONE]";
-  try { return Boolean(JSON.parse(data)?.choices?.some((choice) => choice?.finish_reason)); } catch { return false; }
-}
-
-// Read only through the semantic terminal event. This is intentionally used
-// for forced JSON responses too: Response.text() would otherwise wait for a
-// trailing upstream usage chunk that this feature must ignore.
-async function readSSEUntilTerminal(stream) {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let raw = "";
-  let pending = "";
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const text = decoder.decode(value, { stream: true });
-      raw += text;
-      pending += text;
-      const blocks = pending.split(/\n\n/);
-      pending = blocks.pop() || "";
-      const hasRawJsonTerminal = raw.split(/\r?\n/).some((line) => line.trim().startsWith("{") && isTerminalSSEBlock(line));
-      if (blocks.some(isTerminalSSEBlock) || hasRawJsonTerminal) {
-        await reader.cancel("early_stream_cutoff");
-        break;
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  return raw;
 }
 
 /**
@@ -159,8 +118,8 @@ export function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
 
   for (const line of String(rawSSE || "").split("\n")) {
     const trimmed = line.trim();
-    if (!trimmed.startsWith("data:") && !trimmed.startsWith("{")) continue;
-    const payload = trimmed.startsWith("data:") ? trimmed.slice(5).trim() : trimmed;
+    if (!trimmed.startsWith("data:")) continue;
+    const payload = trimmed.slice(5).trim();
     if (!payload || payload === "[DONE]") continue;
     try {
       const chunk = JSON.parse(payload);
@@ -183,7 +142,11 @@ export function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
     const choice = chunk?.choices?.[0];
     const delta = choice?.delta || {};
     if (typeof delta.content === "string" && delta.content.length > 0) contentParts.push(delta.content);
-    if (typeof delta.reasoning_content === "string" && delta.reasoning_content.length > 0) reasoningParts.push(delta.reasoning_content);
+    // Vendor aliases (`reasoning`, `reasoning_details[]`) count as reasoning too:
+    // without this an alias lane's thinking is silently dropped before the
+    // empty-content rescue below could keep it.
+    const reasoningText = extractReasoningText(delta);
+    if (reasoningText.length > 0) reasoningParts.push(reasoningText);
     if (choice?.finish_reason) finishReason = choice.finish_reason;
     if (chunk?.usage && typeof chunk.usage === "object") usage = chunk.usage;
 
@@ -212,7 +175,7 @@ export function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
     id: first.id || `chatcmpl-${Date.now()}`,
     object: "chat.completion",
     created: first.created || Math.floor(Date.now() / 1000),
-    model: fallbackModel ? stripThinkingSuffix(fallbackModel) : stripThinkingSuffix(first.model || "unknown"),
+    model: first.model || fallbackModel || "unknown",
     choices: [{ index: 0, message, finish_reason: finishReason }]
   };
   if (usage) result.usage = usage;
@@ -223,19 +186,15 @@ export function parseSSEToOpenAIResponse(rawSSE, fallbackModel) {
  * Handle case: provider forced streaming but client wants JSON.
  * Supports both Codex/Responses API SSE and standard Chat Completions SSE.
  */
-export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, clientRequestedModel, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, customToolNames, trackDone, appendLog, reqTag, log, earlyStreamCutoff = false, clientTokenUsagePolicy = null }) {
+export async function handleForcedSSEToJson({ providerResponse, sourceFormat, targetFormat, provider, model, body, stream, translatedBody, finalBody, requestStartTime, connectionId, apiKey, clientRawRequest, onRequestSuccess, customToolNames, toolNameMap, trackDone, appendLog, reqTag, log }) {
   const contentType = providerResponse.headers.get("content-type") || "";
-  // A number of OpenAI-compatible gateways (including Foza) stream NDJSON/SSE
-  // while incorrectly declaring application/json. This feature forces the
-  // streaming path, so accept that body shape and normalize it below.
-  const isSSE = contentType.includes("text/event-stream") || earlyStreamCutoff || (contentType === "" && isResponsesProvider(provider));
+  const isSSE = contentType.includes("text/event-stream") || (contentType === "" && isResponsesProvider(provider));
   if (!isSSE) return null; // not handled here
 
   trackDone();
 
   const ctx = {
     provider, model, connectionId,
-    headers: clientRawRequest?.headers,
     request: extractRequestConfig(body, stream),
     providerRequest: finalBody || translatedBody || null
   };
@@ -247,30 +206,19 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
   const isCodexResponsesApi = isResponsesProvider(provider) || targetFormat === FORMATS.OPENAI_RESPONSES;
   if (isCodexResponsesApi) {
     try {
-      const responseBody = earlyStreamCutoff
-        ? new ReadableStream({ start: async (controller) => { controller.enqueue(new TextEncoder().encode(await readSSEUntilTerminal(providerResponse.body))); controller.close(); } })
-        : providerResponse.body;
-      const jsonResponse = await convertResponsesStreamToJson(responseBody);
-      if (earlyStreamCutoff) {
-        jsonResponse.usage = estimateUsageWithoutBuffer(body, outputLengthFromResponses(jsonResponse.output), FORMATS.OPENAI_RESPONSES);
-      }
+      const jsonResponse = await convertResponsesStreamToJson(providerResponse.body);
       if (onRequestSuccess) await onRequestSuccess();
-
-      // This path bypasses the normal streaming/non-streaming handlers, so it
-      // must apply the same combo model naming and reasoning usage policy here.
-      applyResponsePolicy(jsonResponse, createReasoningUsagePolicy(body, model));
 
       const usage = jsonResponse.usage || {};
       appendLog({ tokens: usage, status: "200 OK" });
-    saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, requestBody: body || finalBody || translatedBody, silent: true });
+      saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, silent: true });
       if (log?.line) log.line(reqTag, "📊", formatDoneLine({ usage, latency: { total: Date.now() - requestStartTime } }));
 
       // Same cache-inclusive total for the recorded detail, so the DB and the
       // client-facing usage can never disagree.
-      const isPromptInclusive = usage.input_tokens_details !== undefined || usage.prompt_tokens_details !== undefined;
-      const inTokensForLog = isPromptInclusive
-        ? (usage.input_tokens || usage.prompt_tokens || 0)
-        : ((usage.input_tokens || 0) + (usage.cache_read_input_tokens || usage.cached_tokens || 0) + (usage.cache_creation_input_tokens || 0));
+      const inTokensForLog = (usage.input_tokens || 0)
+        + (usage.cache_read_input_tokens || usage.cached_tokens || 0)
+        + (usage.cache_creation_input_tokens || 0);
       const { msgItem, textContent } = pickAssistantMessageForChatCompletion(jsonResponse.output);
       const totalLatency = Date.now() - requestStartTime;
 
@@ -284,34 +232,19 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
 
       // Client is Responses API → return as-is
       if (sourceFormat === FORMATS.OPENAI_RESPONSES) {
-        if (jsonResponse && typeof jsonResponse === "object") {
-          jsonResponse.model = publicModelName(clientRequestedModel || getComboName(body) || body?.model || jsonResponse.model || model);
-        }
-        applyClientTokenUsagePolicy(jsonResponse, clientTokenUsagePolicy || createClientTokenUsagePolicy(body));
-        return { success: true, response: new Response(JSON.stringify(jsonResponse), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }) };
+        return { success: true, response: new Response(JSON.stringify(restoreToolNames(jsonResponse, toolNameMap)), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }) };
       }
 
       // Build client-format response.
-      // input_tokens EXCLUDES cached tokens on cache-capable upstreams (like Claude),
-      // so summing only input+output under-reports prompt_tokens — measured: 2012 reported
+      // input_tokens EXCLUDES cached tokens on cache-capable upstreams, so summing
+      // only input+output under-reports prompt_tokens — measured: 2012 reported
       // where the real prompt was ~5344 with 5332 served from cache. Fold the cache
       // counters in, and keep them visible in prompt_tokens_details so a client can
-      // tell a cache hit from a small prompt. For already-inclusive sources (Responses API),
-      // do not re-add cacheRead/cacheCreate to input_tokens.
-      const cacheRead = usage.cache_read_input_tokens
-        || usage.cached_tokens
-        || usage.input_tokens_details?.cached_tokens
-        || usage.prompt_tokens_details?.cached_tokens
-        || 0;
-      const cacheCreate = usage.cache_creation_input_tokens
-        || usage.input_tokens_details?.cache_creation_tokens
-        || usage.input_tokens_details?.cache_creation_input_tokens
-        || usage.prompt_tokens_details?.cache_creation_tokens
-        || 0;
-      const inTokens = isPromptInclusive ? (usage.input_tokens || 0) : ((usage.input_tokens || 0) + cacheRead + cacheCreate);
+      // tell a cache hit from a small prompt.
+      const cacheRead = usage.cache_read_input_tokens || usage.cached_tokens || 0;
+      const cacheCreate = usage.cache_creation_input_tokens || 0;
+      const inTokens = (usage.input_tokens || 0) + cacheRead + cacheCreate;
       const outTokens = usage.output_tokens || 0;
-      const reasoningTokens = usage.output_tokens_details?.reasoning_tokens
-        ?? usage.completion_tokens_details?.reasoning_tokens;
       const cacheDetails = (cacheRead > 0 || cacheCreate > 0)
         ? { prompt_tokens_details: {
               ...(cacheRead > 0 ? { cached_tokens: cacheRead } : {}),
@@ -335,13 +268,8 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
         finalResp = {
           response: {
             candidates: [{ content: { role: "model", parts: [{ text: textContent || "" }] }, finishReason: "STOP", index: 0 }],
-            usageMetadata: {
-              promptTokenCount: inTokens,
-              candidatesTokenCount: outTokens,
-              totalTokenCount: inTokens + outTokens,
-              ...(Number.isFinite(reasoningTokens) ? { thoughtsTokenCount: reasoningTokens } : {}),
-            },
-            modelVersion: publicModelName(clientRequestedModel || getComboName(body) || body?.model || model),
+            usageMetadata: { promptTokenCount: inTokens, candidatesTokenCount: outTokens, totalTokenCount: inTokens + outTokens },
+            modelVersion: model,
             responseId: jsonResponse.id || `resp_${Date.now()}`
           }
         };
@@ -354,20 +282,17 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
           id: jsonResponse.id || `chatcmpl-${Date.now()}`,
           object: "chat.completion",
           created: jsonResponse.created_at || Math.floor(Date.now() / 1000),
-          model: publicModelName(clientRequestedModel || getComboName(body) || body?.model || jsonResponse.model || model),
+          model: jsonResponse.model || model,
           choices: [{ index: 0, message, finish_reason: finishReason }],
-          usage: {
-            prompt_tokens: inTokens,
-            completion_tokens: outTokens,
-            total_tokens: inTokens + outTokens,
-            ...cacheDetails,
-            ...(Number.isFinite(reasoningTokens) ? { completion_tokens_details: { reasoning_tokens: reasoningTokens } } : {}),
-          }
+          usage: { prompt_tokens: inTokens, completion_tokens: outTokens, total_tokens: inTokens + outTokens, ...cacheDetails }
         };
       }
 
-      applyClientTokenUsagePolicy(finalResp, clientTokenUsagePolicy || createClientTokenUsagePolicy(body));
-      return { success: true, response: new Response(JSON.stringify(finalResp), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }) };
+      if (sourceFormat === FORMATS.CLAUDE) {
+        finalResp = openAICompletionToClaudeMessage(finalResp);
+      }
+
+      return { success: true, response: new Response(JSON.stringify(restoreToolNames(finalResp, toolNameMap)), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }) };
     } catch (err) {
       console.error("[ChatCore] Responses API SSE→JSON failed:", err);
       return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Failed to convert streaming response to JSON");
@@ -376,27 +301,29 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
 
   // Standard Chat Completions SSE path
   try {
-    const sseText = earlyStreamCutoff ? await readSSEUntilTerminal(providerResponse.body) : await providerResponse.text();
-    const parsed = parseSSEToOpenAIResponse(sseText, clientRequestedModel || body?.model || model);
+    const sseText = await providerResponse.text();
+    const parsed = parseSSEToOpenAIResponse(sseText, model);
     if (!parsed) return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Invalid SSE response for non-streaming request");
     if (parsed.error) {
+      // Structured error chunks may carry the real upstream status (e.g. the
+      // Qoder executor emits status 403 for billing envelopes). Preserve it so
+      // the account loop locks/falls back on the right status instead of a
+      // generic 502. Anything outside 400-599 still maps to 502.
+      const upstreamStatus = Number(parsed.error.status);
+      const status = Number.isInteger(upstreamStatus) && upstreamStatus >= 400 && upstreamStatus <= 599
+        ? upstreamStatus
+        : HTTP_STATUS.BAD_GATEWAY;
       return createErrorResult(
-        HTTP_STATUS.BAD_GATEWAY,
+        status,
         parsed.error.message || "Upstream SSE stream failed"
       );
     }
 
     if (onRequestSuccess) await onRequestSuccess();
 
-    applyResponsePolicy(parsed, createReasoningUsagePolicy(body, model));
-
-    const outputLength = (parsed.choices?.[0]?.message?.content || "").length + (parsed.choices?.[0]?.message?.reasoning_content || "").length;
-    const usage = earlyStreamCutoff
-      ? estimateUsageWithoutBuffer(body, outputLength, FORMATS.OPENAI)
-      : (parsed.usage || {});
-    if (earlyStreamCutoff) parsed.usage = usage;
+    const usage = parsed.usage || {};
     appendLog({ tokens: usage, status: "200 OK" });
-      saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, requestBody: body || finalBody || translatedBody, silent: true });
+    saveUsageStats({ provider, model, tokens: usage, connectionId, apiKey, endpoint: clientRawRequest?.endpoint, silent: true });
     if (log?.line) log.line(reqTag, "📊", formatDoneLine({ usage, latency: { total: Date.now() - requestStartTime } }));
 
     const totalLatency = Date.now() - requestStartTime;
@@ -441,11 +368,11 @@ export async function handleForcedSSEToJson({ providerResponse, sourceFormat, ta
     // already imports parseSSEToOpenAIResponse from this module.
     const finalBody = sourceFormat === FORMATS.OPENAI_RESPONSES
       ? chatCompletionToResponses(parsed, customToolNames)
-      : parsed;
+      : sourceFormat === FORMATS.CLAUDE
+        ? openAICompletionToClaudeMessage(parsed)
+        : parsed;
 
-    applyClientTokenUsagePolicy(finalBody, clientTokenUsagePolicy || createClientTokenUsagePolicy(body));
-
-    return { success: true, response: new Response(JSON.stringify(finalBody), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }) };
+    return { success: true, response: new Response(JSON.stringify(restoreToolNames(finalBody, toolNameMap)), { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }) };
   } catch (err) {
     console.error("[ChatCore] Chat Completions SSE→JSON failed:", err);
     return createErrorResult(HTTP_STATUS.BAD_GATEWAY, "Failed to convert streaming response to JSON");

@@ -1,35 +1,59 @@
-// Codex (ChatGPT Plus/Pro) image generation via Responses API + SSE
+// Codex (paid ChatGPT plans: Go/Plus/Pro/...) image generation via Responses API + SSE
 import { randomUUID } from "node:crypto";
 import { nowSec } from "./_base.js";
 import { PROVIDERS } from "../../config/providers.js";
-import {
-  applyCodexSessionHeaders,
-  CODEX_CLI_BETA_FEATURES,
-  CODEX_CLI_ORIGINATOR,
-  CODEX_CLI_USER_AGENT,
-  mergeCodexClientHeaders,
-  mergeCodexUpstreamHeaders,
-} from "../../utils/codexClientHeaders.js";
+import { CODEX_CLI_VERSION } from "../../config/appConstants.js";
 
 const CODEX_RESPONSES_URL = PROVIDERS["codex"].baseUrl;
+const CODEX_USER_AGENT = `codex_cli_rs/${CODEX_CLI_VERSION}`;
+const CODEX_ORIGINATOR = "codex_cli_rs";
 const CODEX_MODEL_SUFFIX = "-image";
 const CODEX_REF_DETAIL = "high";
+// Only drives the image_generation tool call. gpt-5.6-sol is rejected for ChatGPT Go accounts
+// ("model is not supported when using Codex with a ChatGPT account"); gpt-5.6-terra is accepted.
+const CODEX_IMAGES_MAIN_MODEL = "gpt-5.6-terra";
+const CODEX_TOOL_IMAGE_MODELS = new Set([
+  "gpt-image-1.5",
+  "gpt-image-2",
+  "gpt-image-2.5",
+  "gpt-image-2.5-flare",
+  "gpt-image-2.5-sunburst",
+]);
 
-function decodeAccountId(idToken) {
+function decodeOpenAIAuthClaims(token) {
   try {
-    const parts = String(idToken || "").split(".");
+    const parts = String(token || "").split(".");
     if (parts.length !== 3) return null;
     const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
     const pad = (4 - (b64.length % 4)) % 4;
     const payload = JSON.parse(Buffer.from(b64 + "=".repeat(pad), "base64").toString("utf8"));
-    return payload?.["https://api.openai.com/auth"]?.chatgpt_account_id || null;
+    return payload?.["https://api.openai.com/auth"] || null;
   } catch {
     return null;
   }
 }
 
+function decodeAccountId(idToken) {
+  return decodeOpenAIAuthClaims(idToken)?.chatgpt_account_id || null;
+}
+
+// Token claims first: the stored chatgptPlanType is only set at OAuth/import time and goes stale on plan changes.
+function resolveChatgptPlanType(creds) {
+  return decodeOpenAIAuthClaims(creds?.accessToken)?.chatgpt_plan_type
+    || decodeOpenAIAuthClaims(creds?.idToken)?.chatgpt_plan_type
+    || creds?.providerSpecificData?.chatgptPlanType
+    || null;
+}
+
 function stripImageSuffix(model) {
   return model.endsWith(CODEX_MODEL_SUFFIX) ? model.slice(0, -CODEX_MODEL_SUFFIX.length) : model;
+}
+
+function resolveCodexImageModels(model) {
+  if (CODEX_TOOL_IMAGE_MODELS.has(model)) {
+    return { responsesModel: CODEX_IMAGES_MAIN_MODEL, toolModel: model };
+  }
+  return { responsesModel: stripImageSuffix(model), toolModel: null };
 }
 
 function toDataUrl(input) {
@@ -152,7 +176,7 @@ function buildSseResponse(providerResponse, log, onSuccess, onUsage) {
           onPartialImage: (info) => send("partial_image", info),
         });
         if (!b64) {
-          send("error", { message: "Codex did not return an image. Account may not be entitled (Plus/Pro required)." });
+          send("error", { message: "Codex did not return an image. Account may not be entitled (paid ChatGPT plan required)." });
         } else {
           if (usage && onUsage) await onUsage(usage);
           if (onSuccess) await onSuccess();
@@ -178,23 +202,24 @@ function buildSseResponse(providerResponse, log, onSuccess, onUsage) {
 
 export default {
   stream: true,
+  // ChatGPT Free accounts have the image_generation tool stripped server-side
+  // (upstream returns 400 "Tool choice 'image_generation' must be specified with 'tools' parameter").
+  // Unknown plan is allowed so accounts without plan claims keep working.
+  canUseCredentials: (creds) => resolveChatgptPlanType(creds) !== "free",
   buildUrl: () => CODEX_RESPONSES_URL,
   buildHeaders: (creds) => {
     const accountId = creds?.providerSpecificData?.chatgptAccountId || decodeAccountId(creds?.idToken);
-    const sessionId = randomUUID();
-    const headers = {
-      "accept": "text/event-stream",
+    return {
+      "accept": "text/event-stream, application/json",
       "authorization": `Bearer ${creds?.accessToken || ""}`,
       "chatgpt-account-id": accountId || "",
       "content-type": "application/json",
-      "originator": CODEX_CLI_ORIGINATOR,
-      "user-agent": CODEX_CLI_USER_AGENT,
-      "x-codex-beta-features": CODEX_CLI_BETA_FEATURES,
+      "originator": CODEX_ORIGINATOR,
+      "session_id": randomUUID(),
+      "user-agent": CODEX_USER_AGENT,
+      "version": CODEX_CLI_VERSION,
+      "x-client-request-id": randomUUID(),
     };
-    applyCodexSessionHeaders(headers, sessionId);
-    mergeCodexClientHeaders(headers, creds?.rawHeaders);
-    mergeCodexUpstreamHeaders(headers, creds?.upstreamHeaders);
-    return headers;
   },
   buildBody: (model, body) => {
     const refs = [];
@@ -202,21 +227,26 @@ export default {
     const single = toDataUrl(body.image);
     if (single) refs.push(single);
     const detail = body.image_detail || CODEX_REF_DETAIL;
+    const { responsesModel, toolModel } = resolveCodexImageModels(model);
     const imgTool = { type: "image_generation", output_format: (body.output_format || "png").toLowerCase() };
+    if (toolModel) {
+      imgTool.action = refs.length > 0 ? "edit" : "generate";
+      imgTool.model = toolModel;
+    }
     if (body.size && body.size !== "") imgTool.size = body.size;
     if (body.quality && body.quality !== "") imgTool.quality = body.quality;
     if (body.background && body.background !== "") imgTool.background = body.background;
     return {
-      model: stripImageSuffix(model),
+      model: responsesModel,
       instructions: "",
       input: [{ type: "message", role: "user", content: buildContent(body.prompt, refs, detail) }],
       tools: [imgTool],
-      tool_choice: "auto",
+      tool_choice: toolModel ? { type: "image_generation" } : "auto",
       parallel_tool_calls: false,
       prompt_cache_key: randomUUID(),
       stream: true,
       store: false,
-      reasoning: null,
+      reasoning: toolModel ? { effort: "medium", summary: "auto" } : null,
     };
   },
   // Custom: codex parses SSE → either pipe to client or collect b64
@@ -226,7 +256,7 @@ export default {
     }
     const { imageB64: b64, usage } = await parseStream(response, log);
     if (!b64) {
-      throw new Error("Codex did not return an image. Account may not be entitled (Plus/Pro required).");
+      throw new Error("Codex did not return an image. Account may not be entitled (paid ChatGPT plan required).");
     }
     if (usage && onUsage) await onUsage(usage);
     return { created: nowSec(), data: [{ b64_json: b64 }] };
