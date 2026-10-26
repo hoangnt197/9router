@@ -83,26 +83,17 @@ function CollapsibleSection({ title, children, defaultOpen = false, icon = null 
 }
 
 function getCachedTokens(tokens) {
-  return tokens?.cached_tokens
-    || tokens?.cache_read_input_tokens
-    || tokens?.prompt_tokens_details?.cached_tokens
-    || tokens?.input_tokens_details?.cached_tokens
-    || 0;
+  return tokens?.cached_tokens || tokens?.cache_read_input_tokens
+    || tokens?.prompt_tokens_details?.cached_tokens || tokens?.input_tokens_details?.cached_tokens || 0;
 }
 
 function getCacheCreationTokens(tokens) {
-  return tokens?.cache_creation_input_tokens
-    || tokens?.prompt_tokens_details?.cache_creation_tokens
-    || tokens?.input_tokens_details?.cache_creation_tokens
-    || tokens?.input_tokens_details?.cache_creation_input_tokens
-    || 0;
+  return tokens?.cache_creation_input_tokens || tokens?.prompt_tokens_details?.cache_creation_tokens
+    || tokens?.input_tokens_details?.cache_creation_tokens || tokens?.input_tokens_details?.cache_creation_input_tokens || 0;
 }
 
 function getInputTokens(tokens) {
   const prompt = tokens?.prompt_tokens || tokens?.input_tokens || 0;
-  // Canonical storage keeps prompt cache-inclusive. Legacy Claude rows may have
-  // stored prompt cache-exclusive; fall back to cache when it's larger so old
-  // rows don't under-report input.
   const cache = getCachedTokens(tokens);
   return prompt < cache ? cache : prompt;
 }
@@ -204,8 +195,8 @@ export default function RequestDetailsTab() {
     <div className="flex min-w-0 flex-col gap-6">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-text-main">Request log details</h2>
-          <p className="text-xs text-text-muted">Inspect failed request payloads and provider responses.</p>
+          <h2 className="text-lg font-semibold text-text-main">Error log</h2>
+          <p className="text-xs text-text-muted">Inspect failed requests and the connection that produced each error.</p>
         </div>
         <Button variant="outline" size="sm" icon="delete" onClick={handleClearLogs}>
           Clear logs
@@ -285,11 +276,8 @@ export default function RequestDetailsTab() {
                 <th className="text-left p-4 text-sm font-semibold text-text-main">Timestamp</th>
                 <th className="text-left p-4 text-sm font-semibold text-text-main">Model</th>
                 <th className="text-left p-4 text-sm font-semibold text-text-main">Provider</th>
-                <th className="text-right p-4 text-sm font-semibold text-text-main">Input Tokens</th>
-                <th className="text-right p-4 text-sm font-semibold text-text-main">Cached</th>
-                <th className="text-right p-4 text-sm font-semibold text-text-main">Cache Creation</th>
-                <th className="text-right p-4 text-sm font-semibold text-text-main">Output Tokens</th>
-                <th className="text-left p-4 text-sm font-semibold text-text-main">Latency</th>
+                <th className="text-left p-4 text-sm font-semibold text-text-main">Connection</th>
+                <th className="text-left p-4 text-sm font-semibold text-text-main">Error</th>
                 <th className="text-center p-4 text-sm font-semibold text-text-main">Action</th>
               </tr>
             </thead>
@@ -326,23 +314,11 @@ export default function RequestDetailsTab() {
                          {getProviderName(detail.provider, providerNameCache)}
                        </span>
                      </td>
-                    <td className="p-4 text-sm text-text-main text-right font-mono">
-                      {getInputTokens(detail.tokens).toLocaleString()}
+                    <td className="max-w-[180px] truncate p-4 font-mono text-sm text-text-main" title={detail.connectionId || "Unknown connection"}>
+                      {detail.connectionId ? `${detail.connectionId.slice(0, 8)}...` : "—"}
                     </td>
-                    <td className="p-4 text-sm text-text-main text-right font-mono">
-                      {getCachedTokens(detail.tokens) > 0 ? getCachedTokens(detail.tokens).toLocaleString() : "—"}
-                    </td>
-                    <td className="p-4 text-sm text-text-main text-right font-mono">
-                      {getCacheCreationTokens(detail.tokens) > 0 ? getCacheCreationTokens(detail.tokens).toLocaleString() : "—"}
-                    </td>
-                    <td className="p-4 text-sm text-text-main text-right font-mono">
-                      {detail.tokens?.completion_tokens?.toLocaleString() || 0}
-                    </td>
-                    <td className="p-4 text-sm text-text-muted">
-                      <div className="flex flex-col gap-0.5">
-                        <div>TTFT: <span className="font-mono">{detail.latency?.ttft || 0}ms</span></div>
-                        <div>Total: <span className="font-mono">{detail.latency?.total || 0}ms</span></div>
-                      </div>
+                    <td className="max-w-[360px] truncate p-4 text-sm text-red-600" title={detail.response?.error || "Unknown error"}>
+                      {detail.response?.status ? `${detail.response.status} · ` : ""}{detail.response?.error || "Unknown error"}
                     </td>
                     <td className="p-4 text-center">
                       <Button
@@ -407,6 +383,16 @@ export default function RequestDetailsTab() {
                   {selectedDetail.status}
                 </span>
               </div>
+              <div>
+                <span className="text-text-muted">Connection:</span>{" "}
+                <span className="font-mono text-text-main">{selectedDetail.connectionId || "—"}</span>
+              </div>
+              {selectedDetail.headers?.["x-9r-key-suffix"] && (
+                <div>
+                  <span className="text-text-muted">API key:</span>{" "}
+                  <span className="font-mono text-text-main">{selectedDetail.headers["x-9r-key-suffix"]}</span>
+                </div>
+              )}
               <div>
                 <span className="text-text-muted">Latency:</span>{" "}
                 <span className="text-text-main font-mono">

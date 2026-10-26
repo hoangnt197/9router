@@ -35,6 +35,8 @@ function normalize(detail) {
     provider: detail.provider || "unknown",
     model: detail.model || "unknown",
     connectionId: detail.connectionId || null,
+    apiKeyMasked: typeof detail.apiKeyMasked === "string" ? detail.apiKeyMasked : null,
+    errorDisposition: detail.errorDisposition === "fallback" ? "fallback" : "client",
     status: detail.status || "error",
     latency: detail.latency || { ttft: 0, total: 0 },
     tokens: detail.tokens || { prompt_tokens: 0, completion_tokens: 0 },
@@ -61,6 +63,9 @@ async function purgeOldErrors(db) {
 }
 
 export async function saveRequestDetail(detail) {
+  // Keep only errors that reached the client. Intermediate combo/account fallback
+  // failures remain in runtime logs and must not pollute the Error log.
+  if (detail?.errorDisposition === "fallback") return null;
   // All failure paths use status=error. Do not retain successful conversation
   // bodies unless a separate observability policy is added later.
   if (detail?.status !== "error") return null;
