@@ -659,7 +659,13 @@ export const PATTERN_CAPABILITIES = [
  */
 export function aggregateComboCapabilities(comboModels, comboLookup = null, resolveCaps = null, _depth = 0) {
   if (!comboModels?.length || _depth > 6) return null;
-  const allCaps = comboModels.map((fullId) => {
+  const allCaps = comboModels.map((entry) => {
+    // Combo rows may use the legacy string form or the current object form
+    // carrying routing metadata (maxInputTokens, schedule, pricing, ...).
+    // Capability aggregation only needs the model id; normalise here so API
+    // model discovery remains compatible with both persisted formats.
+    const fullId = typeof entry === "string" ? entry : entry?.model;
+    if (typeof fullId !== "string" || !fullId) return getCapabilitiesForModel(null, "");
     // Nested combo: bare name (no slash) that exists in the lookup — recurse
     if (!fullId.includes("/") && comboLookup?.[fullId]) {
       return aggregateComboCapabilities(comboLookup[fullId], comboLookup, resolveCaps, _depth + 1)
