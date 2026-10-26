@@ -31,6 +31,10 @@ const EMPTY_CAPACITY_ADAPTER = {
   videoInput: { ...EMPTY_CAP_ENTRY },
 };
 const upgradeLegacyModel = (m) => (m === "oc/mimo-v2.5-free" ? DEFAULT_FALLBACK_MODEL : m);
+// Combos persisted before and after maxInputTokens support use different seat
+// shapes. The card only renders the public model id; keep the object metadata
+// intact for routing and editing.
+const comboModelId = (entry) => (typeof entry === "string" ? entry : entry?.model) || "";
 
 // Backward-compat: legacy stored form was an array of {model, enabled}.
 function normalizeCapEntry(entry) {
@@ -692,16 +696,19 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
               {combo.models.length === 0 ? (
                 <span className="text-xs text-text-muted italic">No models</span>
               ) : (
-                combo.models.slice(0, 3).map((model, index) => (
+                combo.models.slice(0, 3).map((model, index) => {
+                  const modelId = comboModelId(model);
+                  return (
                   <code key={index} className="inline-flex items-center gap-1 rounded bg-black/5 px-1.5 py-0.5 font-mono text-xs text-text-muted dark:bg-white/5">
-                    <span>{model}</span>
+                    <span>{modelId}</span>
                     <CapacityBadges caps={
-                      comboByName[model]
-                        ? aggregateComboCapabilities(comboByName[model], comboByName, getCaps)
-                        : getCaps?.(model)
+                      comboByName[modelId]
+                        ? aggregateComboCapabilities(comboByName[modelId], comboByName, getCaps)
+                        : getCaps?.(modelId)
                     } />
                   </code>
-                ))
+                  );
+                })
               )}
               {combo.models.length > 3 && (
                 <span className="text-[10px] text-text-muted">+{combo.models.length - 3} more</span>
@@ -724,7 +731,7 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
                   title="Pick the model that fuses panel answers"
                 >
                   <span className="material-symbols-outlined text-[13px]">gavel</span>
-                  <span className="truncate">{judge || `Auto — ${combo.models[0] || "first model"}`}</span>
+                  <span className="truncate">{judge || `Auto — ${comboModelId(combo.models[0]) || "first model"}`}</span>
                 </button>
                 {judge && (
                   <button
