@@ -8,7 +8,7 @@ import {
   isValidApiKey,
 } from "../services/auth.js";
 import { handleAntigravityQuotaError, clearAntigravityStrikes } from "../services/antigravityQuota.js";
-import { getSettings } from "@/lib/localDb";
+import { getSettings, getApiKeyTokenRules } from "@/lib/localDb";
 import { getModelInfo, getComboModels } from "../services/model.js";
 import { handleChatCore } from "open-sse/handlers/chatCore.js";
 import { DEFAULT_HEADROOM_URL } from "@/lib/headroom/detect";
@@ -28,6 +28,7 @@ import { getProjectIdForConnection } from "open-sse/services/projectId.js";
 import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
 import { getKeyAccessContext, enforceKeyAccess, filterAdapterModels } from "../services/keyAccess.js";
 import { resolveSmartChoice } from "../services/systemoneRouter.js";
+import { markClientTokenUsagePolicy } from "open-sse/utils/reasoningUsagePolicy.js";
 
 /**
  * Handle chat completion request
@@ -71,6 +72,20 @@ export async function handleChat(request, clientRawRequest = null) {
     log.debug("AUTH", `API Key: ${masked}`);
   } else {
     log.debug("AUTH", "No API key provided (local mode)");
+  }
+
+  // API-key token rules are a client-facing usage policy. Attach them to the
+  // request before translators/executors clone the body so the final response
+  // can apply multiplier and cache-read ratio consistently.
+  if (apiKey) {
+    try {
+      const tokenRules = await getApiKeyTokenRules(apiKey);
+      if (tokenRules?.input?.length || tokenRules?.output?.length) {
+        markClientTokenUsagePolicy(body, tokenRules);
+      }
+    } catch (error) {
+      log.warn("AUTH", `Unable to load API key token rules: ${error?.message || error}`);
+    }
   }
 
   // Enforce API key if enabled in settings
