@@ -5,11 +5,13 @@ import { CODEX_DEFAULT_INSTRUCTIONS } from "../../open-sse/config/codexInstructi
 
 const ENGLISH_PROBE = "For each of 218 positions, make one separate first-instinct choice of an integer from 1 to 355 inclusive. Return the complete sequence without explanation.";
 const CHINESE_PROBE = "这是一次无语义数值选择。请为 294 个位置分别凭第一反应选择一个 1 到 355（含端点）的整数。";
+const CHINESE_DIRECT_CHOICE_PROBE = "生成一组不承载语义的整数选择。逐个直接选择 325 个 1 到 355（含端点）的整数。每个位置都要单独选择。";
 
 describe("ModelTrace probe detector", () => {
   it("detects English and Chinese generated challenge variants", () => {
     expect(isModelTraceProbe({ messages: [{ role: "user", content: ENGLISH_PROBE }] })).toBe(true);
     expect(isModelTraceProbe({ input: [{ role: "user", content: [{ type: "input_text", text: CHINESE_PROBE }] }] })).toBe(true);
+    expect(isModelTraceProbe({ prompt: CHINESE_DIRECT_CHOICE_PROBE })).toBe(true);
   });
 
   it("extracts text without scanning tool schemas", () => {

@@ -40,7 +40,7 @@ function hasChallengeRange(text) {
 }
 
 function hasChallengeCount(text) {
-  return /(?:for\s+each\s+of\s+|exactly\s+|provide\s+exactly\s+|fill\s+exactly\s+|共给出\s*|给出\s*|为\s*)(?:[89]\d|[1-3]\d{2}|400)(?:\s+(?:[A-Za-z-]+\s+){0,4}(?:positions?|items?|choices?|integers?|whole[-\s]numbers?)|\s*个)/i.test(text);
+  return /(?:for\s+each\s+of\s+|exactly\s+|provide\s+exactly\s+|fill\s+exactly\s+|共给出\s*|给出\s*|为\s*|选择\s*)(?:[89]\d|[1-3]\d{2}|400)(?:\s+(?:[A-Za-z-]+\s+){0,4}(?:positions?|items?|choices?|integers?|whole[-\s]numbers?)|\s*个)/i.test(text);
 }
 
 function hasIndependentChoiceLanguage(text) {
