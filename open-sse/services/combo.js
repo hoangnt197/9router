@@ -371,9 +371,28 @@ export async function handleComboChat({
   resolveSmartChoice = null,
   inputRouting = "soft",
 }) {
-  const persistFinalError = (response) => {
+  const persistFinalError = async (response) => {
     const detail = takeDeferredError(response);
     if (detail) saveRequestDetail(detail).catch(() => {});
+    // A member response can expose its internal provider/model (especially on
+    // request-scoped 4xx errors where fallback stops). Rewrite only the public
+    // error message while preserving status and headers for the combo caller.
+    if (!comboName || !response || response.ok) return response;
+    try {
+      const payload = await response.clone().json();
+      const error = payload?.error;
+      if (error && typeof error.message === "string") {
+        const memberRef = /\[[^\]\s]+\/[^\]]+\]/g;
+        const memberPrefix = /^\[[^\]]+\/[^\]]+\]\s*/;
+        const message = `[${comboName}] ${error.message.replace(memberRef, "").replace(memberPrefix, "")}`;
+        const rewritten = { ...payload, error: { ...error, message } };
+        return new Response(JSON.stringify(rewritten), {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers,
+        });
+      }
+    } catch { /* non-JSON or streaming response: preserve as-is */ }
     return response;
   };
   // Some combo failures happen before a member request is made (for example,
@@ -672,7 +691,7 @@ export async function handleComboChat({
 
       if (!shouldFallback && !requestScoped) {
         log.warn("COMBO", `Model ${modelStr} failed (no fallback)`, { status: result.status });
-        return persistFinalError(result);
+        return await persistFinalError(result);
       }
 
       // A request-scoped 4xx (validation failure, unsupported parameter, context
@@ -721,7 +740,7 @@ export async function handleComboChat({
   // This is also what the caller saw before combos advanced on these errors.
   if (requestScopedResult) {
     log.warn("COMBO", `No model served the request; returning the first request-scoped failure (${requestScopedResult.status})`);
-    return persistFinalError(requestScopedResult);
+    return await persistFinalError(requestScopedResult);
   }
 
   // All models failed
@@ -730,7 +749,17 @@ export async function handleComboChat({
   // or have no active credentials. 503 is more accurate and retryable by clients.
   const allDisabled = lastError && lastError.toLowerCase().includes("no credentials");
   const status = allDisabled ? 503 : (lastStatus || 503);
-  const msg = lastError || "All combo models unavailable";
+  // Errors from a combo member may already contain the selected internal item
+  // (for example `[codex/gpt-6.1-terra(low)] [429]: ...`).  That item is an
+  // implementation detail; callers selected the combo and must see its public
+  // name consistently.  Keep the status/detail while replacing the member
+  // prefix with the combo name.
+  const rawMsg = lastError || "All combo models unavailable";
+  const memberRef = /\[[^\]\s]+\/[^\]]+\]/g;
+  const memberPrefix = /^\[[^\]]+\/[^\]]+\]\s*/;
+  const msg = comboName
+    ? `[${comboName}] ${String(rawMsg).replace(memberRef, "").replace(memberPrefix, "")}`
+    : rawMsg;
   if (lastFailedResponse) {
     const detail = takeDeferredError(lastFailedResponse);
     if (detail) saveRequestDetail(detail).catch(() => {});

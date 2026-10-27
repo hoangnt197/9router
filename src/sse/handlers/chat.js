@@ -28,7 +28,7 @@ import { getProjectIdForConnection } from "open-sse/services/projectId.js";
 import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
 import { getKeyAccessContext, enforceKeyAccess, filterAdapterModels } from "../services/keyAccess.js";
 import { resolveSmartChoice } from "../services/systemoneRouter.js";
-import { createClientTokenUsagePolicy, markClientTokenUsagePolicy } from "open-sse/utils/reasoningUsagePolicy.js";
+import { createClientTokenUsagePolicy, markClientTokenUsagePolicy, preserveComboModelMarker } from "open-sse/utils/reasoningUsagePolicy.js";
 
 /**
  * Handle chat completion request
@@ -330,8 +330,9 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
     // Use shared chatCore
     const chatSettings = await getSettings();
     const providerThinking = (chatSettings.providerThinking || {})[provider] || null;
+    const providerBody = preserveComboModelMarker(body, { ...body, model: `${provider}/${model}` });
     const result = await handleChatCore({
-      body: { ...body, model: `${provider}/${model}` },
+      body: providerBody,
       modelInfo: { provider, model },
       credentials: refreshedCredentials,
       log,

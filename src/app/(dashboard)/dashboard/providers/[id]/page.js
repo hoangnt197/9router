@@ -947,18 +947,12 @@ export default function ProviderDetailPage() {
     setConnections(newConnections);
 
     try {
-      await Promise.all([
-        fetch(`/api/providers/${newConnections[index1].id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ priority: index1 }),
-        }),
-        fetch(`/api/providers/${newConnections[index2].id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ priority: index2 }),
-        }),
-      ]);
+      const res = await fetch("/api/providers/reorder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: providerId, orderedIds: newConnections.map((connection) => connection.id) }),
+      });
+      if (!res.ok) throw new Error("Failed to persist connection order");
     } catch (error) {
       console.log("Error swapping priority:", error);
       await fetchConnections();

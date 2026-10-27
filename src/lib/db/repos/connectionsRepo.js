@@ -227,6 +227,34 @@ export async function reorderProviderConnections(providerId) {
   await db.transaction(async (tx) => reorderInTx(tx, providerId));
 }
 
+/** Persist an explicit UI order atomically. Unknown/duplicate IDs are ignored;
+ * connections omitted by the client remain after the requested entries. */
+export async function reorderProviderConnectionsByIds(providerId, orderedIds) {
+  const db = await getAdapter();
+  let result = [];
+  await db.transaction(async (tx) => {
+    const current = (await tx.all(`SELECT * FROM providerConnections WHERE provider = ?`, [providerId])).map(rowToConn);
+    const byId = new Map(current.map((connection) => [connection.id, connection]));
+    const seen = new Set();
+    const ordered = [];
+    for (const id of Array.isArray(orderedIds) ? orderedIds : []) {
+      if (!byId.has(id) || seen.has(id)) continue;
+      seen.add(id);
+      ordered.push(byId.get(id));
+    }
+    current
+      .filter((connection) => !seen.has(connection.id))
+      .sort((a, b) => (a.priority ?? Number.MAX_SAFE_INTEGER) - (b.priority ?? Number.MAX_SAFE_INTEGER))
+      .forEach((connection) => ordered.push(connection));
+
+    for (const [index, connection] of ordered.entries()) {
+      await tx.run(`UPDATE providerConnections SET priority = ? WHERE id = ?`, [index + 1, connection.id]);
+    }
+    result = ordered.map((connection, index) => ({ ...connection, priority: index + 1 }));
+  });
+  return result;
+}
+
 export async function cleanupProviderConnections() {
   const db = await getAdapter();
   const fieldsToCheck = [
