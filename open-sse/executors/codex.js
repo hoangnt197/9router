@@ -13,6 +13,7 @@ import { getThinkingLevels } from "../providers/thinkingLevels.js";
 import { DEFAULT_RETRY_CONFIG, HTTP_STATUS, resolveRetryEntry } from "../config/runtimeConfig.js";
 import { dbg } from "../utils/debugLog.js";
 import { resolveSessionId } from "../utils/sessionManager.js";
+import { isModelTraceProbe } from "../utils/modelTraceProbe.js";
 import {
   applyCodexSessionHeaders,
   CODEX_CLI_ORIGINATOR,
@@ -477,7 +478,10 @@ export class CodexExecutor extends BaseExecutor {
     const hasClientInstructions = (typeof body.instructions === "string" && body.instructions.trim().length > 0)
       || (Array.isArray(body.input) && body.input.some(item => item && (item.role === "developer" || item.role === "system")));
 
-    if (!hasClientInstructions) {
+    // ModelTrace measures the model's native number-selection behavior. Keep
+    // client-supplied instructions intact, but do not add 9Router's default
+    // Codex prompt to a high-confidence probe request.
+    if (!hasClientInstructions && !isModelTraceProbe(body)) {
       body.instructions = getCodexInstructions(body.model || model);
     }
 
