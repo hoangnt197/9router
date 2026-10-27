@@ -227,7 +227,7 @@ function createStreamingResponse(sourceFormat, model, text) {
  * Merge translated chunks into final response object (for non-streaming)
  * Takes the last complete chunk as the final response
  */
-function mergeChunksToResponse(chunks, sourceFormat) {
+export function mergeChunksToResponse(chunks, sourceFormat) {
   if (!chunks || chunks.length === 0) {
     return createOpenAIResponse("unknown");
   }

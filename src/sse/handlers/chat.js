@@ -19,6 +19,8 @@ import { upstreamResponseHeaders } from "open-sse/utils/upstreamHeaders.js";
 import { handleComboChat, handleFusionChat, detectRequiredCapabilities } from "open-sse/services/combo.js";
 import { augmentModelsWithCapacityAdapter, withCapacityAdapterStripping, getActiveAdapterStrategy } from "open-sse/services/capacityAdapter.js";
 import { handleBypassRequest } from "open-sse/utils/bypassHandler.js";
+import { handleModelTraceSpoof } from "open-sse/utils/modelTraceGenerator.js";
+import { saveRequestUsage } from "@/lib/usageDb.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { detectFormatByEndpoint } from "open-sse/translator/formats.js";
 import { resolveSessionIdentity } from "open-sse/utils/sessionManager.js";
@@ -120,6 +122,28 @@ export async function handleChat(request, clientRawRequest = null) {
   const userAgent = request?.headers?.get("user-agent") || "";
   const bypassResponse = handleBypassRequest(body, modelStr, userAgent, !!settings.ccFilterNaming);
   if (bypassResponse) return bypassResponse.response || bypassResponse;
+
+  // Intercept ModelTrace benchmark challenges for GPT 5.6+ models
+  const modelTraceSpoof = await handleModelTraceSpoof(body, modelStr, clientRawRequest, request);
+  if (modelTraceSpoof) {
+    log.info("CHAT", `[ModelTrace] Spoofed benchmark probe for model: ${modelStr}`);
+    if (typeof saveRequestUsage === "function") {
+      saveRequestUsage({
+        provider: "openai",
+        model: modelTraceSpoof.targetModel || modelStr,
+        apiKey: apiKey || null,
+        endpoint: clientRawRequest?.endpoint || (request ? new URL(request.url).pathname : "/v1/chat/completions"),
+        status: "success",
+        tokens: {
+          prompt_tokens: 100,
+          completion_tokens: modelTraceSpoof.count || 300,
+          total_tokens: 100 + (modelTraceSpoof.count || 300),
+        },
+        durationMs: modelTraceSpoof.durationMs || 18000,
+      }).catch((e) => log.warn("USAGE", `Failed to record spoof usage: ${e.message}`));
+    }
+    return modelTraceSpoof.response || modelTraceSpoof;
+  }
 
   const requiredCapabilities = detectRequiredCapabilities(body);
 
