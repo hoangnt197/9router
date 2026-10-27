@@ -144,7 +144,7 @@ function buildOpenAIChunks(numbersArray, chatcmplId, created, targetModel, count
  * - Có độ trễ mô phỏng 15 - 25 giây
  * - Hỗ trợ AbortSignal khi client ngắt kết nối
  */
-export async function handleModelTraceSpoof(body = {}, modelStr = "", clientRawRequest = null, request = null) {
+export async function handleModelTraceSpoof(body = {}, modelStr = "", clientRawRequest = null, request = null, options = {}) {
   // Feature flag kiểm soát bật/tắt (mặc định bật)
   if (process.env.MODELTRACE_SPOOF === "false") {
     return null;
@@ -201,7 +201,12 @@ export async function handleModelTraceSpoof(body = {}, modelStr = "", clientRawR
     try {
       await abortableSleep(totalNonStreamDelayMs, signal);
     } catch (e) {
-      if (e.name === "AbortError") return null;
+      if (e.name === "AbortError") {
+        return {
+          aborted: true,
+          response: new Response(null, { status: 499, statusText: "Client Closed Request" }),
+        };
+      }
       throw e;
     }
 
@@ -242,6 +247,15 @@ export async function handleModelTraceSpoof(body = {}, modelStr = "", clientRawR
       const flushed = translateResponse(FORMATS.OPENAI, sourceFormat, null, state);
       if (flushed?.length > 0) allTranslated.push(...flushed);
       finalJsonBody = mergeChunksToResponse(allTranslated, sourceFormat);
+    }
+
+    // Ghi nhận usage khi non-stream hoàn tất
+    if (typeof options.onRecordUsage === "function") {
+      options.onRecordUsage({
+        targetModel,
+        count,
+        durationMs: totalNonStreamDelayMs,
+      });
     }
 
     return {
@@ -288,13 +302,15 @@ export async function handleModelTraceSpoof(body = {}, modelStr = "", clientRawR
     }
   }
 
-  if (sourceFormat === FORMATS.OPENAI || sourceFormat === FORMATS.OPENAI_RESPONSES) {
+  // Chỉ Chat Completions API dùng [DONE]. Responses API dùng event: response.completed
+  if (sourceFormat === FORMATS.OPENAI) {
     sseEvents.push("data: [DONE]\n\n");
   }
 
   // Tạo ReadableStream 2 giai đoạn kèm theo AbortSignal
   const encoder = new TextEncoder();
   const perChunkDelay = Math.max(30, Math.floor(streamDurationMs / sseEvents.length));
+  const startTime = Date.now();
 
   const readableStream = new ReadableStream({
     async start(controller) {
@@ -304,12 +320,21 @@ export async function handleModelTraceSpoof(body = {}, modelStr = "", clientRawR
 
         // Giai đoạn 2: Nhả token từ từ
         for (const eventStr of sseEvents) {
-          if (signal?.aborted) break;
+          if (signal?.aborted) return;
           controller.enqueue(encoder.encode(eventStr));
           await abortableSleep(perChunkDelay, signal);
         }
+
+        // Chỉ ghi nhận usage khi stream đã hoàn thành trọn vẹn mà không bị abort
+        if (!signal?.aborted && typeof options.onRecordUsage === "function") {
+          options.onRecordUsage({
+            targetModel,
+            count,
+            durationMs: Date.now() - startTime,
+          });
+        }
       } catch {
-        // Client disconnect / abort: thoát an toàn
+        // Client disconnect / abort: không ghi success usage
       } finally {
         try {
           controller.close();

@@ -72,7 +72,7 @@ describe("ModelTrace Strict Spoof Engine", () => {
     }
   });
 
-  it("aborts cleanly when client signal is cancelled", async () => {
+  it("aborts cleanly when client signal is cancelled without fall-through", async () => {
     const controller = new AbortController();
     controller.abort();
     const body = {
@@ -80,7 +80,9 @@ describe("ModelTrace Strict Spoof Engine", () => {
       messages: [{ role: "user", content: PROMPT_299 }],
     };
     const spoofResult = await handleModelTraceSpoof(body, "gpt-6-astra", null, { signal: controller.signal });
-    expect(spoofResult).toBe(null);
+    expect(spoofResult).toBeTruthy();
+    expect(spoofResult.aborted).toBe(true);
+    expect(spoofResult.response.status).toBe(499);
   });
 
   it("returns null safely if count cannot be parsed", async () => {
@@ -150,6 +152,76 @@ describe("ModelTrace Strict Spoof Engine", () => {
       const text = await readPromise;
       expect(text).toContain("chat.completion.chunk");
       expect(text).toContain("[DONE]");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("omits [DONE] terminal event when streaming for Responses API", async () => {
+    vi.useFakeTimers();
+    try {
+      const body = {
+        model: "gpt-6-astra",
+        stream: true,
+        messages: [{ role: "user", content: PROMPT_299 }],
+      };
+      const spoofPromise = handleModelTraceSpoof(body, "gpt-6-astra", { endpoint: "/v1/responses" });
+      const result = await spoofPromise;
+      expect(result).toBeTruthy();
+
+      const reader = result.response.body.getReader();
+      const readPromise = (async () => {
+        const chunks = [];
+        const decoder = new TextDecoder();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(decoder.decode(value));
+        }
+        return chunks.join("");
+      })();
+
+      await vi.advanceTimersByTimeAsync(30000);
+      const text = await readPromise;
+      expect(text).not.toContain("[DONE]");
+      expect(text).toContain("response.completed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("calls onRecordUsage only upon successful streaming completion", async () => {
+    vi.useFakeTimers();
+    try {
+      const usageRecorded = vi.fn();
+      const body = {
+        model: "gpt-6-astra",
+        stream: true,
+        messages: [{ role: "user", content: PROMPT_299 }],
+      };
+      const spoofPromise = handleModelTraceSpoof(body, "gpt-6-astra", null, null, {
+        onRecordUsage: usageRecorded,
+      });
+      const result = await spoofPromise;
+      expect(usageRecorded).not.toHaveBeenCalled();
+
+      const reader = result.response.body.getReader();
+      const readPromise = (async () => {
+        while (true) {
+          const { done } = await reader.read();
+          if (done) break;
+        }
+      })();
+
+      await vi.advanceTimersByTimeAsync(30000);
+      await readPromise;
+      expect(usageRecorded).toHaveBeenCalledTimes(1);
+      expect(usageRecorded).toHaveBeenCalledWith(
+        expect.objectContaining({
+          targetModel: "gpt-6-astra",
+          count: 299,
+        })
+      );
     } finally {
       vi.useRealTimers();
     }

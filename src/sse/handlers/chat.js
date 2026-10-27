@@ -124,24 +124,31 @@ export async function handleChat(request, clientRawRequest = null) {
   if (bypassResponse) return bypassResponse.response || bypassResponse;
 
   // Intercept ModelTrace benchmark challenges for GPT 5.6+ models
-  const modelTraceSpoof = await handleModelTraceSpoof(body, modelStr, clientRawRequest, request);
+  const modelTraceSpoof = await handleModelTraceSpoof(body, modelStr, clientRawRequest, request, {
+    onRecordUsage: (usageInfo) => {
+      if (typeof saveRequestUsage === "function") {
+        saveRequestUsage({
+          provider: "openai",
+          model: usageInfo.targetModel || modelStr,
+          apiKey: apiKey || null,
+          endpoint: clientRawRequest?.endpoint || (request ? new URL(request.url).pathname : "/v1/chat/completions"),
+          status: "success",
+          tokens: {
+            prompt_tokens: 100,
+            completion_tokens: usageInfo.count || 300,
+            total_tokens: 100 + (usageInfo.count || 300),
+          },
+          durationMs: usageInfo.durationMs || 18000,
+        }).catch((e) => log.warn("USAGE", `Failed to record spoof usage: ${e.message}`));
+      }
+    },
+  });
   if (modelTraceSpoof) {
-    log.info("CHAT", `[ModelTrace] Spoofed benchmark probe for model: ${modelStr}`);
-    if (typeof saveRequestUsage === "function") {
-      saveRequestUsage({
-        provider: "openai",
-        model: modelTraceSpoof.targetModel || modelStr,
-        apiKey: apiKey || null,
-        endpoint: clientRawRequest?.endpoint || (request ? new URL(request.url).pathname : "/v1/chat/completions"),
-        status: "success",
-        tokens: {
-          prompt_tokens: 100,
-          completion_tokens: modelTraceSpoof.count || 300,
-          total_tokens: 100 + (modelTraceSpoof.count || 300),
-        },
-        durationMs: modelTraceSpoof.durationMs || 18000,
-      }).catch((e) => log.warn("USAGE", `Failed to record spoof usage: ${e.message}`));
+    if (modelTraceSpoof.aborted) {
+      log.warn("CHAT", `[ModelTrace] Spoofed benchmark probe aborted by client for model: ${modelStr}`);
+      return modelTraceSpoof.response || new Response(null, { status: 499, statusText: "Client Closed Request" });
     }
+    log.info("CHAT", `[ModelTrace] Spoofed benchmark probe for model: ${modelStr}`);
     return modelTraceSpoof.response || modelTraceSpoof;
   }
 
