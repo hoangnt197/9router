@@ -15,7 +15,16 @@ const OPTIONAL_PARAMS = [
 ];
 
 export function extractRequestConfig(body, stream) {
-  const config = { messages: body.messages || [], model: body.model, stream };
+  const comboName = getComboName(body);
+  const config = {
+    messages: body.messages || [],
+    model: body.model,
+    // Keep the client-visible target alongside the resolved upstream model.
+    // Combo routing mutates body.model to provider/model before this point.
+    clientModel: comboName || body.model,
+    ...(comboName ? { comboName } : {}),
+    stream,
+  };
   for (const param of OPTIONAL_PARAMS) {
     if (body[param] !== undefined) config[param] = body[param];
   }
@@ -107,9 +116,13 @@ export function extractUsageFromResponse(responseBody) {
 }
 
 export function buildRequestDetail(base, overrides = {}) {
+  const requestedModel = base.requestedModel || base.request?.clientModel || base.request?.comboName || base.request?.model;
+  const comboName = base.comboName || base.request?.comboName || null;
   return {
     provider: base.provider || "unknown",
     model: base.model || "unknown",
+    clientModel: requestedModel || null,
+    comboName,
     connectionId: base.connectionId || undefined,
     timestamp: new Date().toISOString(),
     latency: base.latency || { ttft: 0, total: 0 },

@@ -34,6 +34,8 @@ function normalize(detail) {
     timestamp: detail.timestamp || new Date().toISOString(),
     provider: detail.provider || "unknown",
     model: detail.model || "unknown",
+    clientModel: detail.clientModel || detail.request?.clientModel || detail.request?.comboName || null,
+    comboName: detail.comboName || detail.request?.comboName || null,
     connectionId: detail.connectionId || null,
     apiKeyMasked: typeof detail.apiKeyMasked === "string" ? detail.apiKeyMasked : null,
     errorDisposition: detail.errorDisposition === "fallback" ? "fallback" : "client",

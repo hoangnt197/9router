@@ -20,7 +20,7 @@ import { handleComboChat, handleFusionChat, detectRequiredCapabilities } from "o
 import { augmentModelsWithCapacityAdapter, withCapacityAdapterStripping, getActiveAdapterStrategy } from "open-sse/services/capacityAdapter.js";
 import { handleBypassRequest } from "open-sse/utils/bypassHandler.js";
 import { handleModelTraceSpoof } from "open-sse/utils/modelTraceGenerator.js";
-import { saveRequestUsage } from "@/lib/usageDb.js";
+import { appendRequestLog, saveRequestDetail, saveRequestUsage } from "@/lib/usageDb.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { detectFormatByEndpoint } from "open-sse/translator/formats.js";
 import { resolveSessionIdentity } from "open-sse/utils/sessionManager.js";
@@ -30,7 +30,61 @@ import { getProjectIdForConnection } from "open-sse/services/projectId.js";
 import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
 import { getKeyAccessContext, enforceKeyAccess, filterAdapterModels } from "../services/keyAccess.js";
 import { resolveSmartChoice } from "../services/systemoneRouter.js";
-import { createClientTokenUsagePolicy, markClientTokenUsagePolicy, preserveComboModelMarker } from "open-sse/utils/reasoningUsagePolicy.js";
+import { createClientTokenUsagePolicy, markClientTokenUsagePolicy, preserveComboModelMarker, getComboName } from "open-sse/utils/reasoningUsagePolicy.js";
+import { attachDeferredError } from "open-sse/utils/deferredError.js";
+
+/**
+ * Persist failures that are rejected before an upstream request is created.
+ * Account selection can short-circuit when every credential is model-locked;
+ * those failures otherwise never reach chatCore's normal request-detail path.
+ */
+function buildAllRateLimitedDetail({ provider, model, body, clientRawRequest, credentials }) {
+  const retryAfter = credentials?.retryAfter || null;
+  const retryAfterSeconds = retryAfter
+    ? Math.max(Math.ceil((new Date(retryAfter).getTime() - Date.now()) / 1000), 1)
+    : null;
+  const message = credentials?.lastError || "All accounts are rate limited";
+  const detail = {
+    provider,
+    model,
+    clientModel: getComboName(body) || clientRawRequest?.body?.model || body?.model || model,
+    comboName: getComboName(body),
+    errorDisposition: "client",
+    status: "error",
+    latency: { ttft: 0, total: 0 },
+    tokens: { prompt_tokens: 0, completion_tokens: 0 },
+    headers: clientRawRequest?.headers,
+    request: {
+      model: body?.model,
+      stream: body?.stream,
+    },
+    response: {
+      error: message,
+      status: HTTP_STATUS.SERVICE_UNAVAILABLE,
+      reason: "all_accounts_locked",
+      retryAfter,
+      retryAfterSeconds,
+    },
+  };
+  return detail;
+}
+
+function persistAllRateLimitedDetail({ provider, model, body, clientRawRequest, credentials, deferErrorPersistence, response }) {
+  const detail = buildAllRateLimitedDetail({ provider, model, body, clientRawRequest, credentials });
+  if (deferErrorPersistence) {
+    attachDeferredError(response, detail);
+    return;
+  }
+  saveRequestDetail(detail).catch((error) => {
+    log.warn("REQUEST", `Failed to persist all-locked detail: ${error?.message || error}`);
+  });
+  appendRequestLog({
+    model,
+    provider,
+    connectionId: null,
+    status: `FAILED ${HTTP_STATUS.SERVICE_UNAVAILABLE} all_accounts_locked`,
+  }).catch(() => {});
+}
 
 /**
  * Handle chat completion request
@@ -335,7 +389,17 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         const errorMsg = lastError || credentials.lastError || "Unavailable";
         const status = HTTP_STATUS.SERVICE_UNAVAILABLE;
         log.warn("CHAT", `[${provider}/${model}] ${errorMsg} (${credentials.retryAfterHuman})`);
-        return unavailableResponse(status, `[${provider}/${model}] ${errorMsg}`, credentials.retryAfter, credentials.retryAfterHuman, lastHeaders);
+        const response = unavailableResponse(status, `[${provider}/${model}] ${errorMsg}`, credentials.retryAfter, credentials.retryAfterHuman, lastHeaders);
+        persistAllRateLimitedDetail({
+          provider,
+          model,
+          body,
+          clientRawRequest,
+          credentials,
+          deferErrorPersistence,
+          response,
+        });
+        return response;
       }
       if (excludeConnectionIds.size === 0) {
         log.warn("AUTH", `No active credentials for provider: ${provider}`);

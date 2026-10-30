@@ -52,6 +52,15 @@ export const DEFAULT_SAFETY_SETTINGS = [
   { category: "HARM_CATEGORY_CIVIC_INTEGRITY", threshold: "OFF" }
 ];
 
+// Gemini's inline_data.data field is a protobuf bytes field and accepts only
+// the base64 payload. Some OpenAI-compatible clients put a complete data URI
+// in input_audio.data; strip that transport prefix before serializing the
+// Gemini request. Keep bare base64 untouched.
+function normalizeInlineBase64(value) {
+  if (typeof value !== "string") return value;
+  return value.replace(/^data:[^;,]+;base64,/i, "");
+}
+
 // Convert OpenAI content to Gemini parts
 export function convertOpenAIContentToParts(content) {
   const parts = [];
@@ -82,14 +91,14 @@ export function convertOpenAIContentToParts(content) {
         const format = item.input_audio.format || "wav";
         const mimeType = format === "mp3" ? "audio/mpeg" : `audio/${format}`;
         parts.push({
-          inlineData: { mime_type: mimeType, data: item.input_audio.data }
+          inlineData: { mime_type: mimeType, data: normalizeInlineBase64(item.input_audio.data) }
         });
       } else if (item.type === OPENAI_BLOCK.AUDIO_URL && item.audio_url?.url?.startsWith("data:")) {
         const url = item.audio_url.url;
         const commaIndex = url.indexOf(",");
         if (commaIndex !== -1) {
           const mimePart = url.substring(5, commaIndex);
-          const data = url.substring(commaIndex + 1);
+          const data = normalizeInlineBase64(url.substring(0, commaIndex + 1) + url.substring(commaIndex + 1));
           const mimeType = mimePart.split(";")[0];
           parts.push({
             inlineData: { mime_type: mimeType, data: data }
@@ -100,7 +109,7 @@ export function convertOpenAIContentToParts(content) {
         const commaIndex = url.indexOf(",");
         if (commaIndex !== -1) {
           const mimeType = url.substring(5, commaIndex).split(";")[0];
-          const data = url.substring(commaIndex + 1);
+          const data = normalizeInlineBase64(url.substring(0, commaIndex + 1) + url.substring(commaIndex + 1));
           parts.push({ inlineData: { mime_type: mimeType, data: data } });
         }
       }
@@ -356,6 +365,72 @@ function ensureArrayItems(obj) {
   for (const v of Object.values(obj)) if (v && typeof v === "object") ensureArrayItems(v);
 }
 
+// A few OpenAI/MCP schema producers emit map values wrapped in `{ value: ... }`
+// or put schema objects in scalar fields such as `type`/`description`. Gemini's
+// protobuf validator rejects the whole request in that case. Normalize only
+// these malformed shapes; valid JSON Schema is left unchanged.
+function normalizeMalformedSchemaNodes(obj) {
+  if (!obj || typeof obj !== "object") return;
+
+  // Some MCP/OpenAPI converters place a property map directly where Gemini
+  // expects a schema node (for example `{ reason: { type: ... } }` under an
+  // array item). Re-wrap that map as an object schema before walking it; if it
+  // is left untouched, protobuf reports the property name as an unknown field.
+  const schemaKeys = new Set([
+    "type", "description", "properties", "required", "items", "enum", "nullable",
+    "anyOf", "oneOf", "allOf", "not", "default", "examples", "$ref", "$defs",
+  ]);
+  let keys = Object.keys(obj);
+  if (keys.length === 1 && typeof obj.TYPE === "string") {
+    obj.type = obj.TYPE.toLowerCase();
+    delete obj.TYPE;
+    keys = Object.keys(obj);
+  }
+  if (keys.length > 0 && !keys.some((key) => schemaKeys.has(key) || key.startsWith("x-"))) {
+    const propertyMap = {};
+    for (const key of keys) propertyMap[key] = obj[key];
+    for (const key of keys) delete obj[key];
+    obj.type = "object";
+    obj.properties = propertyMap;
+  }
+
+  if (obj.type && typeof obj.type !== "string") {
+    const nestedType = obj.type?.type || obj.type?.TYPE;
+    obj.type = typeof nestedType === "string" ? nestedType.toLowerCase() : (obj.properties ? "object" : "string");
+  }
+  if (obj.description && typeof obj.description !== "string") {
+    const nestedDescription = obj.description?.text ?? obj.description?.value;
+    obj.description = typeof nestedDescription === "string"
+      ? nestedDescription
+      : JSON.stringify(obj.description);
+  }
+
+  if (obj.properties && typeof obj.properties === "object" && !Array.isArray(obj.properties)) {
+    for (const [key, rawValue] of Object.entries(obj.properties)) {
+      let value = rawValue;
+      if (value && typeof value === "object" && !Array.isArray(value)
+          && Object.keys(value).length === 1 && value.value && typeof value.value === "object") {
+        value = value.value;
+        obj.properties[key] = value;
+      }
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        obj.properties[key] = { type: "string" };
+      }
+    }
+  }
+
+  for (const [key, value] of Object.entries(obj)) {
+    if (!value || typeof value !== "object") continue;
+    if (key === "properties" && !Array.isArray(value)) {
+      for (const propertyValue of Object.values(value)) {
+        if (propertyValue && typeof propertyValue === "object") normalizeMalformedSchemaNodes(propertyValue);
+      }
+      continue;
+    }
+    normalizeMalformedSchemaNodes(value);
+  }
+}
+
 // Clean JSON Schema for Antigravity API compatibility - removes unsupported keywords recursively
 export function cleanJSONSchemaForAntigravity(schema) {
   if (!schema || typeof schema !== "object") return schema;
@@ -364,6 +439,7 @@ export function cleanJSONSchemaForAntigravity(schema) {
   let cleaned = schema;
 
   // Phase 1: Convert and prepare
+  normalizeMalformedSchemaNodes(cleaned);
   convertConstToEnum(cleaned);
   convertEnumValuesToStrings(cleaned);
 

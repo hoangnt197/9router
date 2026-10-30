@@ -240,13 +240,46 @@ export function mergeChunksToResponse(chunks, sourceFormat) {
   if (sourceFormat === FORMATS.CLAUDE) {
     const messageStop = chunks.find(c => c.type === "message_stop");
     if (messageStop) {
-      // Reconstruct complete message from chunks
-      const contentDelta = chunks.find(c => c.type === "content_block_delta");
+      // Reconstruct complete message from the streamed content blocks.
       const messageDelta = chunks.find(c => c.type === "message_delta");
       const messageStart = chunks.find(c => c.type === "message_start");
 
       if (messageStart?.message) {
-        finalChunk = messageStart.message;
+        const blocks = [];
+        for (const chunk of chunks) {
+          if (chunk.type === "content_block_start" && chunk.content_block) {
+            blocks[chunk.index ?? blocks.length] = { ...chunk.content_block };
+          }
+          if (chunk.type === "content_block_delta" && chunk.delta) {
+            const index = chunk.index ?? 0;
+            const block = blocks[index] || { type: "text", text: "" };
+            if (chunk.delta.type === "text_delta") {
+              block.text = `${block.text || ""}${chunk.delta.text || ""}`;
+            } else if (chunk.delta.type === "thinking_delta") {
+              block.thinking = `${block.thinking || ""}${chunk.delta.thinking || ""}`;
+            } else if (chunk.delta.type === "input_json_delta") {
+              // Claude starts tool_use blocks with input: {}. Keep the JSON
+              // fragments separate so that the object is never coerced to
+              // the literal string "[object Object]".
+              block.__inputJson = `${block.__inputJson || ""}${chunk.delta.partial_json || ""}`;
+            }
+            blocks[index] = block;
+          }
+        }
+        for (const block of blocks) {
+          if (!block || block.__inputJson === undefined) continue;
+          try {
+            block.input = JSON.parse(block.__inputJson);
+          } catch {
+            block.input = {};
+          }
+          delete block.__inputJson;
+        }
+        finalChunk = {
+          ...messageStart.message,
+          ...(blocks.length ? { content: blocks.filter(Boolean) } : {}),
+          ...(messageDelta?.delta || {}),
+        };
         // message_start.usage has input + cache; message_delta.usage has the
         // final output_tokens. Merge so cache survives (delta omits it).
         const startUsage = messageStart.message.usage;

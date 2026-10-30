@@ -31,18 +31,28 @@ export function abortableSleep(ms, signal) {
       err.name = "AbortError";
       return reject(err);
     }
-    const timer = setTimeout(resolve, ms);
+    let settled = false;
+    const cleanup = () => {
+      if (signal) signal.removeEventListener("abort", onAbort);
+    };
+    const onResolve = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    };
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      cleanup();
+      const err = new Error("Request aborted by client");
+      err.name = "AbortError";
+      reject(err);
+    };
+    const timer = setTimeout(onResolve, ms);
     if (signal) {
-      signal.addEventListener(
-        "abort",
-        () => {
-          clearTimeout(timer);
-          const err = new Error("Request aborted by client");
-          err.name = "AbortError";
-          reject(err);
-        },
-        { once: true }
-      );
+      signal.addEventListener("abort", onAbort, { once: true });
     }
   });
 }
@@ -77,6 +87,7 @@ export function resolveGptTargetModel(modelStr = "") {
  * Sinh chuỗi số ngụy trang dựa trên reference samples thật của model từ dataset
  */
 export function generateProbeSequence(targetModel, count) {
+  if (!Number.isInteger(count) || count < 80 || count > 400) return null;
   const pool = GPT_BANK[targetModel];
   if (!pool || !pool.length) return null;
 

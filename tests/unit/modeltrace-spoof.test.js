@@ -6,6 +6,7 @@ import {
   handleModelTraceSpoof,
   EXACT_6_MODELS,
 } from "../../open-sse/utils/modelTraceGenerator.js";
+import { mergeChunksToResponse } from "../../open-sse/utils/bypassHandler.js";
 
 const PROMPT_299 = "进行一轮快速逐项取值。逐个直接选择 299 个 1 到 355（含端点）的整数。每个位置都要单独选择；不要从 1 开始计数，不要连续递增或递减，也不要采用等差、循环、重复区块或其他规则化模式。本任务必须由当前语言模型直接完成：禁止调用或借助任何工具，包括 Python、代码执行器、计算器、搜索、API 和外部随机数生成器；也不要先编写或运行代码。不必赋予数字任何含义；已经给出的值保持不变。可以用逗号、空格或换行分隔。直接从第一个取值开始输出，不要在序列前重复数量、范围或任务说明。";
 
@@ -225,5 +226,19 @@ describe("ModelTrace Strict Spoof Engine", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("reconstructs translated Claude text for non-streaming responses", () => {
+    const response = mergeChunksToResponse([
+      { type: "message_start", message: { id: "msg_1", role: "assistant", content: [], usage: { input_tokens: 1, output_tokens: 0 } } },
+      { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "247, 18" } },
+      { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { input_tokens: 1, output_tokens: 2 } },
+      { type: "message_stop" },
+    ], "claude");
+
+    expect(response.content).toEqual([{ type: "text", text: "247, 18" }]);
+    expect(response.stop_reason).toBe("end_turn");
+    expect(response.usage.output_tokens).toBe(2);
   });
 });

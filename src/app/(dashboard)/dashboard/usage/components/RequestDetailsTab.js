@@ -287,7 +287,8 @@ export default function RequestDetailsTab() {
             <thead>
               <tr className="border-b border-black/5 dark:border-white/5">
                 <th className="text-left p-4 text-sm font-semibold text-text-main">Timestamp</th>
-                <th className="text-left p-4 text-sm font-semibold text-text-main">Model</th>
+                <th className="text-left p-4 text-sm font-semibold text-text-main">Client model</th>
+                <th className="text-left p-4 text-sm font-semibold text-text-main">Upstream model</th>
                 <th className="text-left p-4 text-sm font-semibold text-text-main">Provider</th>
                 <th className="text-left p-4 text-sm font-semibold text-text-main">Account</th>
                 <th className="text-left p-4 text-sm font-semibold text-text-main">Error</th>
@@ -319,7 +320,10 @@ export default function RequestDetailsTab() {
                     <td className="whitespace-nowrap p-4 text-sm text-text-main">
                       {new Date(detail.timestamp).toLocaleString()}
                     </td>
-                    <td className="max-w-[260px] truncate p-4 font-mono text-sm text-text-main">
+                    <td className="max-w-[220px] truncate p-4 font-mono text-sm text-text-main" title={detail.clientModel || detail.comboName || detail.model}>
+                      {detail.clientModel || detail.comboName || detail.model}
+                    </td>
+                    <td className="max-w-[220px] truncate p-4 font-mono text-sm text-text-muted" title={detail.model}>
                       {detail.model}
                     </td>
                     <td className="max-w-[180px] truncate p-4 text-sm text-text-main">
@@ -384,7 +388,11 @@ export default function RequestDetailsTab() {
                  <span className="text-text-main font-medium">{getProviderName(selectedDetail.provider, providerNameCache)}</span>
                </div>
               <div>
-                <span className="text-text-muted">Model:</span>{" "}
+                <span className="text-text-muted">Client model:</span>{" "}
+                <span className="text-text-main font-mono">{selectedDetail.clientModel || selectedDetail.comboName || selectedDetail.model}</span>
+              </div>
+              <div>
+                <span className="text-text-muted">Upstream model:</span>{" "}
                 <span className="text-text-main font-mono">{selectedDetail.model}</span>
               </div>
               <div>

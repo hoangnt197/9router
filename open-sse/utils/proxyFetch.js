@@ -214,6 +214,19 @@ function normalizeProxyUrl(proxyUrl) {
   }
 }
 
+// Keep proxy diagnostics useful without ever logging credentials embedded in a
+// proxy URL. This makes timeout attribution possible when a pool has several
+// active entries.
+function proxyLabel(proxyUrl) {
+  if (!proxyUrl) return "direct";
+  try {
+    const parsed = new URL(proxyUrl);
+    return `${parsed.protocol}//${parsed.hostname}${parsed.port ? `:${parsed.port}` : ""}`;
+  } catch {
+    return "invalid-proxy";
+  }
+}
+
 function resolveConnectionProxyUrl(targetUrl, proxyOptions) {
   const enabled = proxyOptions?.enabled === true || proxyOptions?.connectionProxyEnabled === true;
   if (!enabled) return null;
@@ -364,7 +377,7 @@ export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
         if (proxyOptions?.strictProxy === true) {
           throw new Error(`[ProxyFetch] Proxy required but failed (strictProxy=true): ${proxyError.message}`);
         }
-        console.warn(`[ProxyFetch] Proxy failed, falling back to direct bypass: ${proxyError.message}`);
+        console.warn(`[ProxyFetch] Proxy failed (${proxyLabel(proxyUrl)}), falling back to direct bypass: ${proxyError.message}`);
       }
     }
     // No proxy — manually resolve real IP to bypass DNS spoof
@@ -385,7 +398,7 @@ export async function proxyAwareFetch(url, options = {}, proxyOptions = null) {
       if (proxyOptions?.strictProxy === true) {
         throw new Error(`[ProxyFetch] Proxy required but failed (strictProxy=true): ${proxyError.message}`);
       }
-      console.warn(`[ProxyFetch] Proxy failed, falling back to direct: ${proxyError.message}`);
+      console.warn(`[ProxyFetch] Proxy failed (${proxyLabel(proxyUrl)}), falling back to direct: ${proxyError.message}`);
       return fetchWithTlsFallback(url, options, null);
     }
   }
