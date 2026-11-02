@@ -9,6 +9,7 @@ import {
   CAVEMAN_LEVELS,
   PONYTAIL_LEVELS,
 } from "../endpoint/endpointConstants";
+import ModerationCard from "./ModerationCard";
 
 export default function TokenSaverClient() {
   const [rtkEnabled, setRtkEnabledState] = useState(true);
@@ -1075,6 +1076,10 @@ export default function TokenSaverClient() {
         confirmText={extrasConfirm?.confirmText}
         variant={extrasConfirm?.variant}
       />
+
+      <ModerationCard />
     </div>
   );
 }
+
+export { ModerationCard };
