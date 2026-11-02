@@ -173,8 +173,14 @@ export async function handleChat(request, clientRawRequest = null) {
   const keyAccessDenied = await enforceKeyAccess(keyAccess, modelStr);
   if (keyAccessDenied) return keyAccessDenied;
 
+  // Bypass naming/warmup requests before combo rotation to avoid wasting rotation slots
+  const userAgent = request?.headers?.get("user-agent") || "";
+  const bypassResponse = handleBypassRequest(body, modelStr, userAgent, !!settings.ccFilterNaming);
+  if (bypassResponse) return bypassResponse.response || bypassResponse;
+
   // Content moderation via v1/moderations API.
-  // Runs before bypass / combo rotation to avoid wasting upstream quota on harmful prompts.
+  // Runs after bypass handler (warmup/naming requests are exempt) but before
+  // combo rotation / upstream calls to avoid wasting quota on harmful prompts.
   if (settings.moderationEnabled && settings.moderationApiKey) {
     const userText = extractLatestUserText(body);
     if (userText) {
@@ -193,11 +199,6 @@ export async function handleChat(request, clientRawRequest = null) {
       }
     }
   }
-
-  // Bypass naming/warmup requests before combo rotation to avoid wasting rotation slots
-  const userAgent = request?.headers?.get("user-agent") || "";
-  const bypassResponse = handleBypassRequest(body, modelStr, userAgent, !!settings.ccFilterNaming);
-  if (bypassResponse) return bypassResponse.response || bypassResponse;
 
   // Intercept ModelTrace benchmark challenges for GPT 5.6+ models
   const modelTraceSpoof = await handleModelTraceSpoof(body, modelStr, clientRawRequest, request, {
