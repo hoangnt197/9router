@@ -15,7 +15,7 @@ export default function ModerationCard() {
   const [moderationApiKey, setModerationApiKey]         = useState("");
   const [moderationModel, setModerationModel]           = useState("omni-moderation-latest");
   const [moderationTimeoutMs, setModerationTimeoutMs]   = useState(3000);
-  const [moderationTargetScope, setModerationTargetScope] = useState("gpt");
+  const [moderationTargetModels, setModerationTargetModels] = useState("gpt-*");
   const [moderationRefusalMessage, setModerationRefusalMessage] = useState("");
 
   const [showKey, setShowKey]         = useState(false);
@@ -35,7 +35,7 @@ export default function ModerationCard() {
         setModerationApiKey(data.moderationApiKey || "");
         setModerationModel(data.moderationModel || "omni-moderation-latest");
         if (typeof data.moderationTimeoutMs === "number") setModerationTimeoutMs(data.moderationTimeoutMs);
-        setModerationTargetScope(data.moderationTargetScope || "gpt");
+        setModerationTargetModels(data.moderationTargetModels || "gpt-*");
         setModerationRefusalMessage(data.moderationRefusalMessage || "");
       })
       .catch(() => {});
@@ -70,7 +70,7 @@ export default function ModerationCard() {
         moderationApiKey: moderationApiKey.trim(),
         moderationModel: moderationModel.trim() || "omni-moderation-latest",
         moderationTimeoutMs: Math.max(500, Number(moderationTimeoutMs) || 3000),
-        moderationTargetScope,
+        moderationTargetModels: moderationTargetModels.trim() || "gpt-*",
         moderationRefusalMessage: moderationRefusalMessage.trim(),
       });
     } finally {
@@ -190,19 +190,17 @@ export default function ModerationCard() {
           </div>
         </div>
 
-        {/* Target models scope */}
+        {/* Target models pattern */}
         <div>
-          <label className="block text-xs font-medium mb-1">Target Models (Phạm vi model áp dụng)</label>
-          <select
-            value={moderationTargetScope}
-            onChange={(e) => setModerationTargetScope(e.target.value)}
-            className="w-full rounded border border-black/10 bg-white px-3 py-2 text-sm dark:border-white/10 dark:bg-black/20 focus:outline-none"
-          >
-            <option value="gpt">Chỉ họ GPT (gpt-*, chatgpt-*, o1-*, o3-*)</option>
-            <option value="all">Tất cả các model (All models)</option>
-          </select>
+          <label className="block text-xs font-medium mb-1">Target Models (Mô hình áp dụng)</label>
+          <Input
+            value={moderationTargetModels}
+            onChange={(e) => setModerationTargetModels(e.target.value)}
+            placeholder="gpt-*"
+            className="font-mono text-sm"
+          />
           <p className="text-xs text-text-muted mt-1">
-            Chọn model cần kiểm duyệt. Nếu chọn họ GPT, các model khác (Gemini, Claude, DeepSeek...) sẽ bỏ qua để tối ưu tốc độ và quota.
+            Nhập pattern wildcard như <code>gpt-*</code> hoặc danh sách model phân cách bằng dấu phẩy như <code>gpt-4o, gpt-4o-mini, o1-*</code>. Nhập <code>*</code> nếu muốn áp dụng tất cả model.
           </p>
         </div>
 

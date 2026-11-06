@@ -75,38 +75,52 @@ export function extractLatestUserText(body) {
 }
 
 // ---------------------------------------------------------------------------
-// Model scope detection (cached, synchronous check on client-sent model)
+// Model scope detection (cached, wildcard & list matching on client model)
 // ---------------------------------------------------------------------------
 
-const gptModelCache = new Map();
+let cachedPatternStr = null;
+let cachedMatchers = null;
 
-/**
- * Check if a model name belongs to the GPT/OpenAI model family.
- * Result is cached in-memory for instant lookups.
- * @param {string} modelStr
- * @returns {boolean}
- */
-export function isGptModel(modelStr) {
-  if (!modelStr || typeof modelStr !== "string") return false;
-  if (gptModelCache.has(modelStr)) return gptModelCache.get(modelStr);
+function compilePattern(pattern) {
+  const p = pattern.trim().toLowerCase();
+  if (!p || p === "*") return () => true;
+  if (p.includes("*")) {
+    const escaped = p.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+    const regex = new RegExp(`^${escaped}$`, "i");
+    return (name) => regex.test(name);
+  }
+  // Exact match or prefix before '-' (e.g. "gpt" matches "gpt", "gpt-4o")
+  return (name) => name === p || name.startsWith(p + "-") || name.startsWith(p + "/");
+}
 
-  const clean = modelStr.toLowerCase().split("/").pop().replace(/^[a-z0-9_-]+__/, "");
-  const matched = /^gpt|^chatgpt|^o[134](?:-|\b)|[-_]gpt/i.test(clean);
-
-  if (gptModelCache.size > 500) gptModelCache.clear();
-  gptModelCache.set(modelStr, matched);
-  return matched;
+function getMatchers(patternStr) {
+  if (patternStr === cachedPatternStr && cachedMatchers) {
+    return cachedMatchers;
+  }
+  const parts = patternStr.split(/[,\s]+/).map((s) => s.trim().toLowerCase()).filter(Boolean);
+  cachedMatchers = parts.map(compilePattern);
+  cachedPatternStr = patternStr;
+  return cachedMatchers;
 }
 
 /**
- * Determine if client-sent model should be moderated.
+ * Determine if client-sent model should be moderated based on configured patterns.
+ * Supports comma-separated models, wildcard patterns (e.g. "gpt-*", "o1-*"), or "*" for all.
+ *
  * @param {string} modelStr - The model name sent by the client.
  * @param {Object} settings - App settings.
  * @returns {boolean}
  */
 export function shouldModerateModel(modelStr, settings) {
-  if (settings?.moderationTargetScope === "all") return true;
-  return isGptModel(modelStr);
+  const patternStr = (settings?.moderationTargetModels || "gpt-*").trim();
+  if (!patternStr || patternStr === "*") return true;
+  if (!modelStr || typeof modelStr !== "string") return false;
+
+  const raw = modelStr.toLowerCase().trim();
+  const clean = raw.split("/").pop().replace(/^[a-z0-9_-]+__/, "");
+
+  const matchers = getMatchers(patternStr);
+  return matchers.some((fn) => fn(clean) || fn(raw));
 }
 
 // ---------------------------------------------------------------------------
