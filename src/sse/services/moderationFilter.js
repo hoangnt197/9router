@@ -75,44 +75,38 @@ export function extractLatestUserText(body) {
 }
 
 // ---------------------------------------------------------------------------
-// Model scope detection
+// Model scope detection (cached, synchronous check on client-sent model)
 // ---------------------------------------------------------------------------
+
+const gptModelCache = new Map();
 
 /**
  * Check if a model name belongs to the GPT/OpenAI model family.
- * Handles prefixes like "openai/gpt-4o", "a6/gpt-5.6-sol", "ckey__gpt-6-astra", etc.
+ * Result is cached in-memory for instant lookups.
  * @param {string} modelStr
  * @returns {boolean}
  */
 export function isGptModel(modelStr) {
   if (!modelStr || typeof modelStr !== "string") return false;
+  if (gptModelCache.has(modelStr)) return gptModelCache.get(modelStr);
+
   const clean = modelStr.toLowerCase().split("/").pop().replace(/^[a-z0-9_-]+__/, "");
-  return /^gpt|^chatgpt|^o[134](?:-|\b)|[-_]gpt/i.test(clean);
+  const matched = /^gpt|^chatgpt|^o[134](?:-|\b)|[-_]gpt/i.test(clean);
+
+  if (gptModelCache.size > 500) gptModelCache.clear();
+  gptModelCache.set(modelStr, matched);
+  return matched;
 }
 
 /**
- * Determine if a request should be moderated based on the target scope.
- * @param {string} modelStr - The client-requested model or combo name.
+ * Determine if client-sent model should be moderated.
+ * @param {string} modelStr - The model name sent by the client.
  * @param {Object} settings - App settings.
- * @param {Array} [comboModels] - Optional list of underlying combo models if resolved.
  * @returns {boolean}
  */
-export function shouldModerateModel(modelStr, settings, comboModels = null) {
-  const scope = settings?.moderationTargetScope || "gpt";
-  if (scope === "all") return true;
-
-  // 1. Direct check on client requested model name
-  if (isGptModel(modelStr)) return true;
-
-  // 2. If comboModels are known, check if any member model is a GPT model
-  if (Array.isArray(comboModels) && comboModels.length > 0) {
-    return comboModels.some((m) => {
-      const name = typeof m === "object" && m !== null ? m.model : m;
-      return isGptModel(name);
-    });
-  }
-
-  return false;
+export function shouldModerateModel(modelStr, settings) {
+  if (settings?.moderationTargetScope === "all") return true;
+  return isGptModel(modelStr);
 }
 
 // ---------------------------------------------------------------------------

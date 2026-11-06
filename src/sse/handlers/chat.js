@@ -181,31 +181,21 @@ export async function handleChat(request, clientRawRequest = null) {
   // Content moderation via v1/moderations API.
   // Runs after bypass handler (warmup/naming requests are exempt) but before
   // combo rotation / upstream calls to avoid wasting quota on harmful prompts.
-  if (settings.moderationEnabled && settings.moderationApiKey) {
-    let needsCheck = shouldModerateModel(modelStr, settings);
-    if (!needsCheck && (settings.moderationTargetScope || "gpt") === "gpt") {
-      const comboModels = await getComboModels(modelStr);
-      if (comboModels && shouldModerateModel(modelStr, settings, comboModels)) {
-        needsCheck = true;
-      }
-    }
-
-    if (needsCheck) {
-      const userText = extractLatestUserText(body);
-      if (userText) {
-        const modResult = await checkModeration(userText, settings, log);
-        if (modResult.blocked) {
-          const sourceIp = request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip") || "";
-          const url = new URL(request.url);
-          log.warn("MODERATION", `Blocked request — categories: [${(modResult.categories || []).join(", ")}]`);
-          return createModerationBlockedResponse(
-            body,
-            modResult.categories || [],
-            url.pathname,
-            sourceIp,
-            settings.moderationRefusalMessage || ""
-          );
-        }
+  if (settings.moderationEnabled && settings.moderationApiKey && shouldModerateModel(modelStr, settings)) {
+    const userText = extractLatestUserText(body);
+    if (userText) {
+      const modResult = await checkModeration(userText, settings, log);
+      if (modResult.blocked) {
+        const sourceIp = request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip") || "";
+        const url = new URL(request.url);
+        log.warn("MODERATION", `Blocked request — categories: [${(modResult.categories || []).join(", ")}]`);
+        return createModerationBlockedResponse(
+          body,
+          modResult.categories || [],
+          url.pathname,
+          sourceIp,
+          settings.moderationRefusalMessage || ""
+        );
       }
     }
   }
