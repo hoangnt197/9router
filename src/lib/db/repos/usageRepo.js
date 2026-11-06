@@ -35,12 +35,18 @@ const statsEmitTimers = global._statsEmitTimers;
 if (!global._usageWriteQueue) global._usageWriteQueue = [];
 if (!global._usageFlushTimer) global._usageFlushTimer = null;
 if (!global._usageFlushPromise) global._usageFlushPromise = null;
+if (!global._usageStatsCache) global._usageStatsCache = { data: new Map(), pending: new Map() };
 
 const usageWriteQueue = global._usageWriteQueue;
+const statsCache = global._usageStatsCache;
 const USAGE_BATCH_MAX = 64;
 const USAGE_BATCH_DELAY_MS = 25;
 
 export const statsEmitter = global._statsEmitter;
+
+export function invalidateStatsCache() {
+  statsCache.data.clear();
+}
 
 function scheduleStatsEvent(event, delayMs = 150) {
   const key = event === "update" ? "update" : "pending";
@@ -342,7 +348,10 @@ async function flushUsageQueue() {
         const inserted = await persistUsageBatch(batch.map((item) => item.entry));
         for (const item of batch) item.resolve();
         for (const entry of inserted) pushToRing(entry);
-        if (inserted.length > 0) scheduleStatsEvent("update", 250);
+        if (inserted.length > 0) {
+          invalidateStatsCache();
+          scheduleStatsEvent("update", 250);
+        }
       } catch (error) {
         for (const item of batch) item.reject(error);
       }
@@ -407,6 +416,31 @@ async function loadDaysInRange(adapter, maxDays) {
 }
 
 export async function getUsageStats(period = "all", range = {}) {
+  const cacheKey = `${period}:${range.startDate || ""}:${range.endDate || ""}`;
+  const now = Date.now();
+  const cached = statsCache.data.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    return cached.result;
+  }
+  if (statsCache.pending.has(cacheKey)) {
+    return statsCache.pending.get(cacheKey);
+  }
+
+  const computePromise = (async () => {
+    try {
+      const result = await computeUsageStats(period, range);
+      statsCache.data.set(cacheKey, { result, expiresAt: Date.now() + 5000 });
+      return result;
+    } finally {
+      statsCache.pending.delete(cacheKey);
+    }
+  })();
+
+  statsCache.pending.set(cacheKey, computePromise);
+  return computePromise;
+}
+
+async function computeUsageStats(period = "all", range = {}) {
   const db = await getAdapter();
   const hasCustomRange = Boolean(range.startDate && range.endDate);
 
@@ -619,10 +653,10 @@ export async function getUsageStats(period = "all", range = {}) {
     }
 
     // Overlay precise lastUsed timestamps from history
-    const overlayCutoff = maxDays ? Date.now() - maxDays * 86400000 : 0;
+    // Inspect only the latest 1000 requests using primary key index instead of scanning
+    // the entire table (500k+ rows) from 1970 onwards.
     const histRows = await db.all(
-      `SELECT timestamp, provider, model, connectionId, apiKey, endpoint, meta FROM usageHistory WHERE timestamp >= ?`,
-      [new Date(overlayCutoff).toISOString()]
+      `SELECT timestamp, provider, model, connectionId, apiKey, endpoint, meta FROM usageHistory ORDER BY id DESC LIMIT 1000`
     );
     for (const e of histRows) {
       const ts = e.timestamp;
@@ -669,10 +703,15 @@ export async function getUsageStats(period = "all", range = {}) {
     );
 
     for (const r of filtered) {
-      const tokens = parseJson(r.tokens, {}) || {};
-      const promptTokens = tokens.prompt_tokens || 0;
-      const completionTokens = tokens.completion_tokens || 0;
-      const cachedTokens = tokens.cached_tokens || tokens.cache_read_input_tokens || 0;
+      let promptTokens = r.promptTokens || 0;
+      let completionTokens = r.completionTokens || 0;
+      let cachedTokens = 0;
+      if (r.tokens && (r.tokens.includes("cache") || (!promptTokens && !completionTokens))) {
+        const parsed = parseJson(r.tokens, {}) || {};
+        promptTokens = promptTokens || parsed.prompt_tokens || parsed.input_tokens || 0;
+        completionTokens = completionTokens || parsed.completion_tokens || parsed.output_tokens || 0;
+        cachedTokens = parsed.cached_tokens || parsed.cache_read_input_tokens || 0;
+      }
       const entryCost = r.cost || 0;
       const providerDisplayName = providerNodeNameMap[r.provider] || r.provider;
 
@@ -742,8 +781,8 @@ export async function getUsageStats(period = "all", range = {}) {
       epe.requests++; epe.promptTokens += promptTokens; epe.completionTokens += completionTokens; epe.cachedTokens += cachedTokens; epe.cost += entryCost;
       if (new Date(r.timestamp) > new Date(epe.lastUsed)) epe.lastUsed = r.timestamp;
 
-      const meta = parseJson(r.meta, {}) || {};
-      if (meta.comboTracked === true) {
+      if (r.meta && r.meta.includes('"comboTracked":true')) {
+        const meta = parseJson(r.meta, {}) || {};
         const comboName = meta.comboName || "Direct / No combo";
         const comboKey = `${comboName}|${r.model}|${r.provider || "unknown"}`;
         if (!stats.byCombo[comboKey]) {

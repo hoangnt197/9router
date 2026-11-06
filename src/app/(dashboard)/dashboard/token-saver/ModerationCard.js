@@ -15,6 +15,7 @@ export default function ModerationCard() {
   const [moderationApiKey, setModerationApiKey]         = useState("");
   const [moderationModel, setModerationModel]           = useState("omni-moderation-latest");
   const [moderationTimeoutMs, setModerationTimeoutMs]   = useState(3000);
+  const [moderationTargetScope, setModerationTargetScope] = useState("gpt");
   const [moderationRefusalMessage, setModerationRefusalMessage] = useState("");
 
   const [showKey, setShowKey]         = useState(false);
@@ -34,6 +35,7 @@ export default function ModerationCard() {
         setModerationApiKey(data.moderationApiKey || "");
         setModerationModel(data.moderationModel || "omni-moderation-latest");
         if (typeof data.moderationTimeoutMs === "number") setModerationTimeoutMs(data.moderationTimeoutMs);
+        setModerationTargetScope(data.moderationTargetScope || "gpt");
         setModerationRefusalMessage(data.moderationRefusalMessage || "");
       })
       .catch(() => {});
@@ -68,6 +70,7 @@ export default function ModerationCard() {
         moderationApiKey: moderationApiKey.trim(),
         moderationModel: moderationModel.trim() || "omni-moderation-latest",
         moderationTimeoutMs: Math.max(500, Number(moderationTimeoutMs) || 3000),
+        moderationTargetScope,
         moderationRefusalMessage: moderationRefusalMessage.trim(),
       });
     } finally {
@@ -185,6 +188,22 @@ export default function ModerationCard() {
               className="font-mono text-sm"
             />
           </div>
+        </div>
+
+        {/* Target models scope */}
+        <div>
+          <label className="block text-xs font-medium mb-1">Target Models (Phạm vi model áp dụng)</label>
+          <select
+            value={moderationTargetScope}
+            onChange={(e) => setModerationTargetScope(e.target.value)}
+            className="w-full rounded border border-black/10 bg-white px-3 py-2 text-sm dark:border-white/10 dark:bg-black/20 focus:outline-none"
+          >
+            <option value="gpt">Chỉ họ GPT (gpt-*, chatgpt-*, o1-*, o3-*)</option>
+            <option value="all">Tất cả các model (All models)</option>
+          </select>
+          <p className="text-xs text-text-muted mt-1">
+            Chọn model cần kiểm duyệt. Nếu chọn họ GPT, các model khác (Gemini, Claude, DeepSeek...) sẽ bỏ qua để tối ưu tốc độ và quota.
+          </p>
         </div>
 
         {/* Custom refusal message */}

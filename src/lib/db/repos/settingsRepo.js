@@ -75,6 +75,7 @@ const DEFAULT_SETTINGS = {
   moderationApiKey: "",
   moderationModel: "omni-moderation-latest",
   moderationTimeoutMs: 3000,
+  moderationTargetScope: "gpt",
   moderationRefusalMessage:
     "Tôi rất tiếc nhưng không thể hỗ trợ thực hiện yêu cầu này vì lý do an toàn và bảo mật thông tin. Nếu bạn quan tâm, tôi có thể hỗ trợ cung cấp các kiến thức về an toàn thông tin hoặc các giải pháp bảo mật phòng thủ hợp pháp.",
   // Custom presets only. The API layers built-in presets on top.

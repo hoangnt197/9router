@@ -32,7 +32,7 @@ import { getKeyAccessContext, enforceKeyAccess, filterAdapterModels } from "../s
 import { resolveSmartChoice } from "../services/systemoneRouter.js";
 import { createClientTokenUsagePolicy, markClientTokenUsagePolicy, preserveComboModelMarker, getComboName } from "open-sse/utils/reasoningUsagePolicy.js";
 import { attachDeferredError } from "open-sse/utils/deferredError.js";
-import { extractLatestUserText, checkModeration, createModerationBlockedResponse } from "../services/moderationFilter.js";
+import { extractLatestUserText, checkModeration, createModerationBlockedResponse, shouldModerateModel } from "../services/moderationFilter.js";
 
 /**
  * Persist failures that are rejected before an upstream request is created.
@@ -182,20 +182,30 @@ export async function handleChat(request, clientRawRequest = null) {
   // Runs after bypass handler (warmup/naming requests are exempt) but before
   // combo rotation / upstream calls to avoid wasting quota on harmful prompts.
   if (settings.moderationEnabled && settings.moderationApiKey) {
-    const userText = extractLatestUserText(body);
-    if (userText) {
-      const modResult = await checkModeration(userText, settings, log);
-      if (modResult.blocked) {
-        const sourceIp = request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip") || "";
-        const url = new URL(request.url);
-        log.warn("MODERATION", `Blocked request — categories: [${(modResult.categories || []).join(", ")}]`);
-        return createModerationBlockedResponse(
-          body,
-          modResult.categories || [],
-          url.pathname,
-          sourceIp,
-          settings.moderationRefusalMessage || ""
-        );
+    let needsCheck = shouldModerateModel(modelStr, settings);
+    if (!needsCheck && (settings.moderationTargetScope || "gpt") === "gpt") {
+      const comboModels = await getComboModels(modelStr);
+      if (comboModels && shouldModerateModel(modelStr, settings, comboModels)) {
+        needsCheck = true;
+      }
+    }
+
+    if (needsCheck) {
+      const userText = extractLatestUserText(body);
+      if (userText) {
+        const modResult = await checkModeration(userText, settings, log);
+        if (modResult.blocked) {
+          const sourceIp = request.headers.get("x-forwarded-for") || request.headers.get("x-real-ip") || "";
+          const url = new URL(request.url);
+          log.warn("MODERATION", `Blocked request — categories: [${(modResult.categories || []).join(", ")}]`);
+          return createModerationBlockedResponse(
+            body,
+            modResult.categories || [],
+            url.pathname,
+            sourceIp,
+            settings.moderationRefusalMessage || ""
+          );
+        }
       }
     }
   }

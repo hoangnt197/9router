@@ -75,6 +75,47 @@ export function extractLatestUserText(body) {
 }
 
 // ---------------------------------------------------------------------------
+// Model scope detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if a model name belongs to the GPT/OpenAI model family.
+ * Handles prefixes like "openai/gpt-4o", "a6/gpt-5.6-sol", "ckey__gpt-6-astra", etc.
+ * @param {string} modelStr
+ * @returns {boolean}
+ */
+export function isGptModel(modelStr) {
+  if (!modelStr || typeof modelStr !== "string") return false;
+  const clean = modelStr.toLowerCase().split("/").pop().replace(/^[a-z0-9_-]+__/, "");
+  return /^gpt|^chatgpt|^o[134](?:-|\b)|[-_]gpt/i.test(clean);
+}
+
+/**
+ * Determine if a request should be moderated based on the target scope.
+ * @param {string} modelStr - The client-requested model or combo name.
+ * @param {Object} settings - App settings.
+ * @param {Array} [comboModels] - Optional list of underlying combo models if resolved.
+ * @returns {boolean}
+ */
+export function shouldModerateModel(modelStr, settings, comboModels = null) {
+  const scope = settings?.moderationTargetScope || "gpt";
+  if (scope === "all") return true;
+
+  // 1. Direct check on client requested model name
+  if (isGptModel(modelStr)) return true;
+
+  // 2. If comboModels are known, check if any member model is a GPT model
+  if (Array.isArray(comboModels) && comboModels.length > 0) {
+    return comboModels.some((m) => {
+      const name = typeof m === "object" && m !== null ? m.model : m;
+      return isGptModel(name);
+    });
+  }
+
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // Upstream moderation call
 // ---------------------------------------------------------------------------
 
